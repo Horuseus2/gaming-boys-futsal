@@ -12,8 +12,12 @@ service cloud.firestore {
         && request.resource.data.name.size() <= 30
         && request.resource.data.pinHash is string
         && request.resource.data.role in ['admin', 'member'];
-      // Accounts can't be edited or deleted from the app.
-      allow update, delete: if false;
+      // Only the role field may ever change (admin promote/demote);
+      // name and PIN stay immutable. Accounts can't be deleted from the app.
+      allow update: if request.auth != null
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role'])
+        && request.resource.data.role in ['admin', 'member'];
+      allow delete: if false;
     }
 
     // sessions: { location, time, maxPlayers, inVotes, outVotes, ... }
@@ -25,12 +29,28 @@ service cloud.firestore {
         && request.resource.data.maxPlayers is int
         && request.resource.data.maxPlayers >= 2
         && request.resource.data.inVotes is list
-        && request.resource.data.outVotes is list;
-      // Voting only changes the two vote arrays; core fields stay immutable.
+        && request.resource.data.outVotes is list
+        && (!('totalFee' in request.resource.data)
+            || (request.resource.data.totalFee is number
+                && request.resource.data.totalFee >= 0));
+      // Votes/guests change freely within the cap; core fields (location,
+      // time, cap, fee — admin edits) must keep valid types. Players + guests
+      // together may never exceed the (possibly updated) cap.
       allow update: if request.auth != null
         && request.resource.data.diff(resource.data).affectedKeys()
-             .hasOnly(['inVotes', 'outVotes'])
-        && request.resource.data.inVotes.size() <= resource.data.maxPlayers;
+             .hasOnly(['inVotes', 'outVotes', 'guests',
+                       'location', 'time', 'maxPlayers', 'totalFee'])
+        && request.resource.data.location is string
+        && request.resource.data.location.size() > 0
+        && request.resource.data.time is timestamp
+        && request.resource.data.maxPlayers is int
+        && request.resource.data.maxPlayers >= 2
+        && (!('totalFee' in request.resource.data)
+            || (request.resource.data.totalFee is number
+                && request.resource.data.totalFee >= 0))
+        && (request.resource.data.inVotes.size()
+            + ('guests' in request.resource.data ? request.resource.data.guests.size() : 0))
+           <= request.resource.data.maxPlayers;
       allow delete: if request.auth != null;
     }
   }
