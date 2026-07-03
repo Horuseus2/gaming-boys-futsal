@@ -46,6 +46,24 @@
           <input type="password" inputmode="numeric" pattern="[0-9]" maxlength="1" class="pin-box" />
         </div>
 
+        <div class="photo-pick" id="photo-pick">
+          <div class="photo-preview" id="photo-preview">📷</div>
+          <div class="photo-pick-text">
+            <button type="button" class="photo-btn" id="photo-btn">Add a profile photo</button>
+            <span class="photo-note">optional — for new accounts</span>
+          </div>
+          <button type="button" class="photo-clear hidden" id="photo-clear" title="Remove photo">✕</button>
+          <input type="file" id="photo-input" accept="image/*" hidden />
+        </div>
+
+        <label class="remember" for="remember-me">
+          <input type="checkbox" id="remember-me" checked />
+          <span class="remember-box">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          </span>
+          Keep me logged in
+        </label>
+
         <button type="submit" id="auth-btn" class="btn btn-primary btn-auth">
           <span class="btn-label" id="auth-btn-label">Let's play</span>
           <span class="btn-spinner"></span>
@@ -65,6 +83,7 @@
       </div>
       <nav class="tabs" id="tabs">
         <button class="tab active" data-tab="feed">Sessions</button>
+        <button class="tab" data-tab="stats">Stats</button>
         <button class="tab" data-tab="members">Members</button>
         <button class="tab admin-only hidden" data-tab="admin">Admin</button>
         <span class="tab-ink" id="tab-ink"></span>
@@ -127,6 +146,35 @@
         <h2>Manage roles</h2>
         <p class="admin-sub">Promote a member to admin, or remove admin rights.</p>
         <div id="roles-list" class="members-list"></div>
+      </div>
+    </main>
+
+    <!-- Stats view (everyone) -->
+    <main id="view-stats" class="view hidden">
+      <div class="stats-hero">
+        <div class="stat-tile">
+          <div class="tile-label">Players</div>
+          <div class="tile-num" id="tile-players">0</div>
+          <div class="tile-sub">registered on the site</div>
+        </div>
+        <div class="stat-tile">
+          <div class="tile-label">Spent on slots</div>
+          <div class="tile-num" id="tile-taka">৳0</div>
+          <div class="tile-sub" id="tile-taka-sub">no sessions played yet</div>
+        </div>
+      </div>
+
+      <div class="admin-card podium-card hidden" id="podium-card">
+        <h2>Leaderboard</h2>
+        <p class="admin-sub">Most sessions attended.</p>
+        <div class="podium" id="podium"></div>
+      </div>
+
+      <div class="admin-card">
+        <h2>Attendance stats</h2>
+        <p class="admin-sub">Appearances vs. sessions each member could have attended (since they joined).</p>
+        <div id="stats-list" class="members-list"></div>
+        <p class="edit-empty hidden" id="stats-empty">No finished sessions yet — stats appear after the first game.</p>
       </div>
     </main>
 

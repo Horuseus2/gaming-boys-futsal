@@ -10,8 +10,28 @@ import {
    ========================================================================== */
 const LS_KEY = "gbf_user";
 let currentUser = null;          // { id, name, role }
+let sessionPersist = true;       // "keep me logged in": localStorage vs sessionStorage
+
+function saveSession(user) {
+  const s = JSON.stringify(user);
+  if (sessionPersist) {
+    localStorage.setItem(LS_KEY, s);
+    sessionStorage.removeItem(LS_KEY);
+  } else {
+    sessionStorage.setItem(LS_KEY, s);
+    localStorage.removeItem(LS_KEY);
+  }
+}
+
+function clearSession() {
+  localStorage.removeItem(LS_KEY);
+  sessionStorage.removeItem(LS_KEY);
+}
 let unsubscribeFeed = null;
 let unsubscribeMembers = null;
+let unsubscribeStats = null;
+let allSessions = [];   // full session history (for stats)
+let membersDocs = [];   // latest users snapshot (shared by members + stats views)
 let pendingSignup = null;        // holds {name, pin} while waiting for confirm tap
 const cardEls = new Map();       // sessionId -> card element
 const sessionsCache = new Map(); // sessionId -> latest data (feeds the admin edit list)
@@ -37,6 +57,57 @@ async function hashPin(nameLower, pin) {
   const data = new TextEncoder().encode(`${nameLower}::${pin}::gbf`);
   const digest = await crypto.subtle.digest("SHA-256", data);
   return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+/* Downscale an image file to a small square JPEG data-URL (~10 KB) so it can
+   live inside the Firestore user document — no Firebase Storage needed. */
+function fileToPhoto(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const S = 160;
+      const canvas = document.createElement("canvas");
+      canvas.width = S; canvas.height = S;
+      const ctx = canvas.getContext("2d");
+      const side = Math.min(img.width, img.height); // center-crop to square
+      ctx.drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, S, S);
+      let q = 0.82, out = canvas.toDataURL("image/jpeg", q);
+      while (out.length > 60000 && q > 0.3) { q -= 0.12; out = canvas.toDataURL("image/jpeg", q); }
+      out.length > 60000 ? reject(new Error("too-big")) : resolve(out);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("bad-image")); };
+    img.src = url;
+  });
+}
+
+function setAvatar(el, photo, name) {
+  el.innerHTML = "";
+  if (photo) {
+    const img = document.createElement("img");
+    img.src = photo;
+    img.alt = name;
+    el.appendChild(img);
+  } else {
+    el.textContent = name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
+  }
+}
+
+/* Animated count-up for the big stat numbers */
+function animateNumber(el, target, format = (n) => n.toLocaleString()) {
+  const from = el._shown ?? 0;
+  if (from === target) { el.textContent = format(target); return; }
+  el._shown = target;
+  const t0 = performance.now(), dur = 900;
+  cancelAnimationFrame(el._raf);
+  const tick = (t) => {
+    const p = Math.min(1, (t - t0) / dur);
+    const eased = 1 - Math.pow(1 - p, 3);
+    el.textContent = format(Math.round(from + (target - from) * eased));
+    if (p < 1) el._raf = requestAnimationFrame(tick);
+  };
+  el._raf = requestAnimationFrame(tick);
 }
 
 let toastTimer = null;
@@ -99,6 +170,31 @@ pinBoxes.forEach((box, i) => {
 function getPin() {
   return pinBoxes.map(b => b.value).join("");
 }
+
+/* Optional profile photo at signup */
+let pendingPhoto = null;
+const photoInput = $("#photo-input");
+$("#photo-btn").addEventListener("click", () => photoInput.click());
+photoInput.addEventListener("change", async () => {
+  const file = photoInput.files[0];
+  photoInput.value = "";
+  if (!file) return;
+  try {
+    pendingPhoto = await fileToPhoto(file);
+    const prev = $("#photo-preview");
+    prev.innerHTML = `<img src="${pendingPhoto}" alt="preview" />`;
+    $("#photo-btn").textContent = "Change photo";
+    $("#photo-clear").classList.remove("hidden");
+  } catch {
+    toast("Couldn't read that image — try another one.", true);
+  }
+});
+$("#photo-clear").addEventListener("click", () => {
+  pendingPhoto = null;
+  $("#photo-preview").innerHTML = "📷";
+  $("#photo-btn").textContent = "Add a profile photo";
+  $("#photo-clear").classList.add("hidden");
+});
 
 function showAuthError(msg) {
   authError.textContent = msg;
@@ -174,7 +270,8 @@ async function createAccount(name, nameLower, pinHash) {
   const role = countSnap.data().count === 0 ? "admin" : "member";
 
   const ref = await addDoc(usersCol, {
-    name, nameLower, pinHash, role, createdAt: serverTimestamp()
+    name, nameLower, pinHash, role, createdAt: serverTimestamp(),
+    ...(pendingPhoto ? { photo: pendingPhoto } : {})
   });
 
   loginAs({ id: ref.id, name, role });
@@ -185,17 +282,25 @@ async function createAccount(name, nameLower, pinHash) {
 
 function loginAs(user) {
   currentUser = user;
-  localStorage.setItem(LS_KEY, JSON.stringify(user));
+  sessionPersist = $("#remember-me").checked;
+  saveSession(user);
+  pendingPhoto = null;
+  $("#photo-preview").innerHTML = "📷";
+  $("#photo-btn").textContent = "Add a profile photo";
+  $("#photo-clear").classList.add("hidden");
   resetSignupMode();
   setLoading(authBtn, false);
   enterApp();
 }
 
 $("#logout-btn").addEventListener("click", () => {
-  localStorage.removeItem(LS_KEY);
+  clearSession();
   currentUser = null;
   if (unsubscribeFeed) { unsubscribeFeed(); unsubscribeFeed = null; }
   if (unsubscribeMembers) { unsubscribeMembers(); unsubscribeMembers = null; }
+  if (unsubscribeStats) { unsubscribeStats(); unsubscribeStats = null; }
+  allSessions = [];
+  membersDocs = [];
   clearInterval(countdownTimer);
   cardEls.clear();
   sessionsCache.clear();
@@ -242,6 +347,7 @@ function enterApp() {
   setTimeout(positionTabInk, 380); // after the screen transition finishes
   startFeed();
   startMembers();
+  startStats();
 }
 
 /* ------------------ Tabs ------------------ */
@@ -254,7 +360,7 @@ function positionTabInk() {
 }
 window.addEventListener("resize", positionTabInk);
 
-const VIEWS = { feed: "#view-feed", members: "#view-members", admin: "#view-admin" };
+const VIEWS = { feed: "#view-feed", stats: "#view-stats", members: "#view-members", admin: "#view-admin" };
 
 $("#tabs").addEventListener("click", (e) => {
   const tab = e.target.closest(".tab");
@@ -264,6 +370,11 @@ $("#tabs").addEventListener("click", (e) => {
   positionTabInk();
 
   Object.values(VIEWS).forEach(sel => $(sel).classList.add("hidden"));
+  if (tab.dataset.tab === "stats") {
+    // Re-run the count-up every time the tab opens
+    ["#tile-players", "#tile-taka"].forEach(sel => { $(sel)._shown = 0; });
+    renderStats();
+  }
   const showEl = $(VIEWS[tab.dataset.tab]);
   showEl.classList.remove("hidden");
   showEl.classList.add("entering");
@@ -598,6 +709,103 @@ function removeCard(id) {
   card.addEventListener("animationend", () => card.remove(), { once: true });
 }
 
+/* ------------------ Stats ------------------ */
+function startStats() {
+  if (unsubscribeStats) unsubscribeStats();
+  // Full history — the feed listener only watches upcoming sessions
+  const q = query(sessionsCol, orderBy("time", "asc"));
+  unsubscribeStats = onSnapshot(q, (snap) => {
+    allSessions = snap.docs.map(d => d.data());
+    renderStats();
+  }, (err) => console.error("stats listener:", err));
+}
+
+function renderStats() {
+  const list = $("#stats-list");
+  if (!currentUser || !membersDocs.length) return;
+
+  const now = Date.now();
+  const played = allSessions.filter(s => s.time?.toMillis && s.time.toMillis() <= now);
+
+  const rows = membersDocs.map(d => {
+    const u = d.data();
+    const joined = u.createdAt?.toMillis ? u.createdAt.toMillis() : 0;
+    // sessions the member could have attended: kicked off after they joined
+    const possible = played.filter(s => s.time.toMillis() >= joined);
+    const attended = possible.filter(s => (s.inVotes || []).includes(u.name));
+    return {
+      id: d.id, name: u.name, photo: u.photo,
+      attended: attended.length, possible: possible.length,
+      rate: possible.length ? attended.length / possible.length : 0
+    };
+  }).sort((a, b) =>
+    b.attended - a.attended || b.rate - a.rate || a.name.localeCompare(b.name));
+
+  // Hero tiles: total players + total taka spent on played sessions
+  animateNumber($("#tile-players"), membersDocs.length);
+  const spent = played.reduce((sum, s) => sum + (typeof s.totalFee === "number" ? s.totalFee : 0), 0);
+  animateNumber($("#tile-taka"), spent, n => `৳${n.toLocaleString()}`);
+  $("#tile-taka-sub").textContent = played.length
+    ? `across ${played.length} session${played.length > 1 ? "s" : ""} played`
+    : "no sessions played yet";
+
+  // Podium: top 3 by appearances
+  const top = rows.filter(r => r.attended > 0).slice(0, 3);
+  $("#podium-card").classList.toggle("hidden", top.length === 0);
+  const podium = $("#podium");
+  podium.innerHTML = "";
+  const medals = ["🥇", "🥈", "🥉"], stepH = [86, 62, 44], cls = ["first", "second", "third"];
+  const order = top.length === 3 ? [1, 0, 2] : top.map((_, i) => i); // 2nd–1st–3rd layout
+  order.forEach(rank => {
+    const r = top[rank];
+    const col = document.createElement("div");
+    col.className = `podium-col ${cls[rank]}`;
+    col.innerHTML = `
+      <span class="podium-medal">${medals[rank]}</span>
+      <div class="podium-avatar"></div>
+      <span class="podium-name"></span>
+      <span class="podium-count"><b></b> games</span>
+      <div class="podium-step" style="height:${stepH[rank]}px"></div>`;
+    setAvatar($(".podium-avatar", col), r.photo, r.name);
+    $(".podium-name", col).textContent = r.name;
+    $(".podium-count b", col).textContent = r.attended;
+    podium.appendChild(col);
+  });
+
+  $("#stats-empty").classList.toggle("hidden", played.length > 0);
+  list.innerHTML = "";
+
+  rows.forEach((r, i) => {
+    const row = document.createElement("div");
+    row.className = "member-row" + (i === 0 && r.attended > 0 ? " top-rank" : "");
+    row.style.setProperty("--stagger", `${Math.min(i, 10) * 0.05}s`);
+    const pct = r.possible ? Math.round(r.rate * 100) : 0;
+
+    row.innerHTML = `
+      <div class="stat-rank"></div>
+      <div class="member-avatar"></div>
+      <div class="stat-body">
+        <div class="stat-top">
+          <span class="stat-name"></span>
+          <span class="stat-score"><b></b> / <span class="stat-possible"></span></span>
+        </div>
+        <div class="stat-bar"><div class="stat-fill"></div></div>
+        <div class="stat-pct"></div>
+      </div>`;
+    $(".stat-rank", row).textContent = i === 0 && r.attended > 0 ? "🏆" : i + 1;
+    setAvatar($(".member-avatar", row), r.photo, r.name);
+    $(".stat-name", row).textContent = r.id === currentUser.id ? `${r.name} (you)` : r.name;
+    $(".stat-score b", row).textContent = r.attended;
+    $(".stat-possible", row).textContent = r.possible;
+    $(".stat-pct", row).textContent = r.possible
+      ? `${pct}% of possible sessions attended`
+      : "no sessions since joining yet";
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => { $(".stat-fill", row).style.width = `${pct}%`; }));
+    list.appendChild(row);
+  });
+}
+
 /* ------------------ Voting ------------------ */
 async function vote(sessionId, choice) {
   const me = currentUser.name;
@@ -757,8 +965,18 @@ function memberRow(docSnap, index, withActions) {
     </div>
     <div class="actions"><span class="member-role"></span></div>`;
 
-  $(".member-avatar", row).textContent =
-    u.name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
+  const avatarEl = $(".member-avatar", row);
+  setAvatar(avatarEl, u.photo, u.name);
+  if (isMe) {
+    // Members can add/change their own photo any time from their row
+    const wrap = document.createElement("button");
+    wrap.type = "button";
+    wrap.className = "avatar-edit";
+    wrap.title = "Change your photo";
+    avatarEl.replaceWith(wrap);
+    wrap.appendChild(avatarEl);
+    wrap.addEventListener("click", () => pickMyPhoto());
+  }
   $(".member-name", row).textContent = isMe ? `${u.name} (you)` : u.name;
   $(".member-joined", row).textContent =
     `Joined ${u.createdAt?.toDate ? fmtJoined.format(u.createdAt.toDate()) : "—"}`;
@@ -782,12 +1000,15 @@ function startMembers() {
     const meDoc = snap.docs.find(d => d.id === currentUser.id);
     if (meDoc && meDoc.data().role !== currentUser.role) {
       currentUser.role = meDoc.data().role;
-      localStorage.setItem(LS_KEY, JSON.stringify(currentUser));
+      saveSession(currentUser);
       applyRoleUI();
       toast(currentUser.role === "admin"
         ? "You've been promoted to Admin! 👑"
         : "Your admin rights were removed.");
     }
+
+    membersDocs = snap.docs;
+    renderStats();
 
     $("#members-count").textContent = snap.size;
     const membersList = $("#members-list");
@@ -803,6 +1024,29 @@ function startMembers() {
     console.error(err);
     toast("Could not load members.", true);
   });
+}
+
+let myPhotoInput = null;
+function pickMyPhoto() {
+  if (!myPhotoInput) {
+    myPhotoInput = document.createElement("input");
+    myPhotoInput.type = "file";
+    myPhotoInput.accept = "image/*";
+    myPhotoInput.addEventListener("change", async () => {
+      const file = myPhotoInput.files[0];
+      myPhotoInput.value = "";
+      if (!file) return;
+      try {
+        const photo = await fileToPhoto(file);
+        await updateDoc(doc(db, "users", currentUser.id), { photo });
+        toast("Profile photo updated 📸");
+      } catch (err) {
+        console.error(err);
+        toast("Couldn't update photo — try another image.", true);
+      }
+    });
+  }
+  myPhotoInput.click();
 }
 
 async function setRole(userId, name, newRole) {
@@ -877,7 +1121,12 @@ async function deleteSession(id, location) {
    ========================================================================== */
 (async function boot() {
   let saved = null;
-  try { saved = JSON.parse(localStorage.getItem(LS_KEY)); } catch { /* corrupt */ }
+  try {
+    const fromLocal = localStorage.getItem(LS_KEY);
+    const fromSession = sessionStorage.getItem(LS_KEY);
+    sessionPersist = !!fromLocal;
+    saved = JSON.parse(fromLocal || fromSession);
+  } catch { /* corrupt */ }
 
   if (saved?.id && saved?.name) {
     try {
@@ -886,12 +1135,12 @@ async function deleteSession(id, location) {
       if (snap.exists()) {
         // Refresh role in case an admin promoted/demoted this user
         currentUser = { id: saved.id, name: snap.data().name, role: snap.data().role };
-        localStorage.setItem(LS_KEY, JSON.stringify(currentUser));
+        saveSession(currentUser);
         enterApp();
         $("#boot").classList.add("gone");
         return;
       }
-      localStorage.removeItem(LS_KEY);
+      clearSession();
     } catch (err) {
       console.error("Session restore failed:", err);
     }

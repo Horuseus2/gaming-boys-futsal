@@ -11,12 +11,19 @@ service cloud.firestore {
         && request.resource.data.name.size() >= 2
         && request.resource.data.name.size() <= 30
         && request.resource.data.pinHash is string
-        && request.resource.data.role in ['admin', 'member'];
-      // Only the role field may ever change (admin promote/demote);
+        && request.resource.data.role in ['admin', 'member']
+        && (!('photo' in request.resource.data)
+            || (request.resource.data.photo is string
+                && request.resource.data.photo.size() < 120000));
+      // Only role (admin promote/demote) and photo may ever change;
       // name and PIN stay immutable. Accounts can't be deleted from the app.
       allow update: if request.auth != null
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role'])
-        && request.resource.data.role in ['admin', 'member'];
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['role', 'photo'])
+        && request.resource.data.role in ['admin', 'member']
+        && (!('photo' in request.resource.data)
+            || (request.resource.data.photo is string
+                && request.resource.data.photo.size() < 120000));
       allow delete: if false;
     }
 
