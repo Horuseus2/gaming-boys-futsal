@@ -1,0 +1,37 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // users: { name, nameLower, pinHash, role, createdAt }
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasAll(['name', 'nameLower', 'pinHash', 'role'])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 2
+        && request.resource.data.name.size() <= 30
+        && request.resource.data.pinHash is string
+        && request.resource.data.role in ['admin', 'member'];
+      // Accounts can't be edited or deleted from the app.
+      allow update, delete: if false;
+    }
+
+    // sessions: { location, time, maxPlayers, inVotes, outVotes, ... }
+    match /sessions/{sessionId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+        && request.resource.data.location is string
+        && request.resource.data.time is timestamp
+        && request.resource.data.maxPlayers is int
+        && request.resource.data.maxPlayers >= 2
+        && request.resource.data.inVotes is list
+        && request.resource.data.outVotes is list;
+      // Voting only changes the two vote arrays; core fields stay immutable.
+      allow update: if request.auth != null
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['inVotes', 'outVotes'])
+        && request.resource.data.inVotes.size() <= resource.data.maxPlayers;
+      allow delete: if request.auth != null;
+    }
+  }
+}
