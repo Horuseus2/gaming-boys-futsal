@@ -545,6 +545,51 @@ function updateCard(id, data) {
   $(".btn-guest-toggle", card).disabled = isFull;
   if (isFull) $(".guest-form", card).classList.add("hidden");
 
+  // Payments: auto-listed from whoever is In (players + guests).
+  // Everyone sees the state; only admins can tick the boxes.
+  const payments = data.payments || {};
+  const participants = [
+    ...inNames.map(n => ({ key: n, label: n, owner: null })),
+    ...guests.map(g => ({ key: `${g.addedBy}→${g.name}`, label: g.name, owner: g.addedBy }))
+  ];
+  const showPay = totalFee > 0 && participants.length > 0;
+  $(".payments", card).classList.toggle("hidden", !showPay);
+  if (showPay) {
+    const paid = participants.filter(p => payments[p.key]).length;
+    $(".pay-count", card).textContent = participants.length;
+    const prog = $(".pay-progress", card);
+    prog.textContent = `${paid}/${participants.length} paid`;
+    prog.classList.toggle("all-paid", paid === participants.length);
+
+    const rowsEl = $(".pay-rows", card);
+    rowsEl.innerHTML = "";
+    participants.forEach(p => {
+      const isPaid = !!payments[p.key];
+      const row = document.createElement("div");
+      row.className = "pay-row" + (isPaid ? " paid" : "");
+      const name = document.createElement("span");
+      name.className = "pay-name";
+      name.textContent = p.label;
+      if (p.owner) {
+        const own = document.createElement("span");
+        own.className = "pay-owner";
+        own.textContent = ` (guest of ${p.owner})`;
+        name.appendChild(own);
+      }
+      const box = document.createElement("button");
+      box.type = "button";
+      box.className = "pay-check" + (isPaid ? " checked" : "");
+      box.disabled = currentUser.role !== "admin";
+      box.title = currentUser.role === "admin"
+        ? (isPaid ? "Mark as unpaid" : "Mark as paid")
+        : (isPaid ? "Paid" : "Not paid yet");
+      box.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+      box.addEventListener("click", () => togglePayment(card.dataset.id, p.key, !isPaid));
+      row.append(name, box);
+      rowsEl.appendChild(row);
+    });
+  }
+
   // Vote buttons
   const btnIn = $(".btn-in", card);
   const btnOut = $(".btn-out", card);
@@ -707,6 +752,23 @@ function removeCard(id) {
   cardEls.delete(id);
   card.classList.add("removing");
   card.addEventListener("animationend", () => card.remove(), { once: true });
+}
+
+async function togglePayment(sessionId, key, paid) {
+  if (currentUser.role !== "admin") return;
+  const ref = doc(db, "sessions", sessionId);
+  try {
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists()) throw new Error("gone");
+      const payments = { ...(snap.data().payments || {}) };
+      if (paid) payments[key] = true; else delete payments[key];
+      tx.update(ref, { payments });
+    });
+  } catch (err) {
+    console.error(err);
+    toast("Couldn't update payment.", true);
+  }
 }
 
 /* ------------------ Stats ------------------ */

@@ -45,8 +45,10 @@ service cloud.firestore {
       // together may never exceed the (possibly updated) cap.
       allow update: if request.auth != null
         && request.resource.data.diff(resource.data).affectedKeys()
-             .hasOnly(['inVotes', 'outVotes', 'guests',
+             .hasOnly(['inVotes', 'outVotes', 'guests', 'payments',
                        'location', 'time', 'maxPlayers', 'totalFee'])
+        && (!('payments' in request.resource.data)
+            || request.resource.data.payments is map)
         && request.resource.data.location is string
         && request.resource.data.location.size() > 0
         && request.resource.data.time is timestamp

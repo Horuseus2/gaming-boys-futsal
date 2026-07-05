@@ -478,6 +478,55 @@ body {
 }
 .btn-guest-submit:hover { box-shadow: 0 8px 22px rgba(251,191,36,0.35); }
 
+/* Payments */
+.payments {
+  background: rgba(0, 0, 0, 0.18); border: 1px solid rgba(255,255,255,0.05);
+  border-radius: var(--radius-sm); padding: 14px; margin-bottom: 20px;
+}
+.payments-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.payments-head h4 {
+  display: flex; align-items: center; gap: 7px;
+  font-family: var(--font-display); font-size: 0.72rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-dim);
+}
+.dot-pay { background: #38bdf8; box-shadow: 0 0 10px rgba(56,189,248,0.5); }
+.pay-progress { font-size: 0.72rem; font-weight: 600; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.pay-progress.all-paid { color: var(--green); }
+.pay-rows { display: flex; flex-direction: column; gap: 6px; }
+.pay-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 10px; border-radius: 9px;
+  background: rgba(255,255,255,0.03);
+  transition: background 0.25s;
+}
+.pay-row.paid { background: rgba(34,197,94,0.07); }
+.pay-name {
+  font-size: 0.85rem; flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: color 0.25s;
+}
+.pay-row.paid .pay-name { color: var(--text-dim); text-decoration: line-through; text-decoration-color: rgba(34,197,94,0.5); }
+.pay-name .pay-owner { color: var(--text-dim); font-size: 0.72rem; }
+.pay-check {
+  position: relative; width: 22px; height: 22px; flex-shrink: 0;
+  border-radius: 7px; cursor: pointer;
+  display: grid; place-items: center;
+  background: rgba(255,255,255,0.05);
+  border: 1.5px solid var(--card-border);
+  color: #06130c; padding: 0;
+  transition: background 0.25s var(--ease-out), border-color 0.25s, transform 0.2s var(--ease-spring);
+}
+.pay-check svg { width: 13px; height: 13px; opacity: 0; transform: scale(0.4);
+  transition: opacity 0.2s, transform 0.25s var(--ease-spring); }
+.pay-check.checked {
+  background: var(--green); border-color: var(--green);
+  box-shadow: 0 4px 12px rgba(34,197,94,0.3);
+}
+.pay-check.checked svg { opacity: 1; transform: scale(1); }
+.pay-check:not(:disabled):hover { transform: scale(1.12); }
+.pay-check:not(:disabled):active { transform: scale(0.88); }
+.pay-check:disabled { cursor: default; }
+
 /* Vote buttons */
 .vote-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .btn-vote { padding: 13px 20px; box-shadow: none; }
