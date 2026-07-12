@@ -83,6 +83,7 @@
       </div>
       <nav class="tabs" id="tabs">
         <button class="tab active" data-tab="feed">Sessions</button>
+        <button class="tab" data-tab="tourney">Tournament</button>
         <button class="tab" data-tab="stats">Stats</button>
         <button class="tab" data-tab="members">Members</button>
         <button class="tab admin-only hidden" data-tab="admin">Admin</button>
@@ -176,6 +177,202 @@
         <div id="stats-list" class="members-list"></div>
         <p class="edit-empty hidden" id="stats-empty">No finished sessions yet — stats appear after the first game.</p>
       </div>
+    </main>
+
+    <!-- Tournament view (everyone) -->
+    <main id="view-tourney" class="view hidden">
+      <div class="tourney-hero">
+        <img class="tourney-logo" src="assets/gb-logo.png?v=2" alt="GB logo" />
+        <div>
+          <h2 class="tourney-title">GB Futsal <span>Season 4</span></h2>
+          <p class="tourney-sub">Tournament hub — register, follow the table, join the auction.</p>
+        </div>
+      </div>
+
+      <nav class="subtabs" id="tourney-subtabs">
+        <button class="subtab active" data-sub="reg">Registration</button>
+        <button class="subtab" data-sub="players">Players</button>
+        <button class="subtab" data-sub="table">Table</button>
+        <button class="subtab" data-sub="auction">Auction</button>
+      </nav>
+
+      <!-- 1) Registration -->
+      <section id="sub-reg" class="subview">
+        <div class="admin-card info-card">
+          <div class="info-head">
+            <h2>Tournament info</h2>
+            <button type="button" id="info-edit-btn" class="btn btn-edit admin-only hidden">Edit info</button>
+          </div>
+          <div id="info-display" class="info-display"></div>
+
+          <form id="info-form" class="info-form hidden">
+            <div class="field">
+              <input type="text" id="i-date" placeholder=" " maxlength="80" required />
+              <label for="i-date">Date &amp; time</label>
+            </div>
+            <div class="field">
+              <input type="text" id="i-deadline" placeholder=" " maxlength="80" required />
+              <label for="i-deadline">Registration deadline</label>
+            </div>
+            <div class="field">
+              <input type="text" id="i-location" placeholder=" " maxlength="80" required />
+              <label for="i-location">Location</label>
+            </div>
+            <div class="info-fee-grid">
+              <div class="field"><input type="number" id="i-fee-b2021" placeholder=" " min="0" /><label for="i-fee-b2021">Fee: 2021 onwards (৳)</label></div>
+              <div class="field"><input type="number" id="i-fee-b2022" placeholder=" " min="0" /><label for="i-fee-b2022">Fee: Batch 2022 (৳)</label></div>
+              <div class="field"><input type="number" id="i-fee-b2023" placeholder=" " min="0" /><label for="i-fee-b2023">Fee: Batch 2023 (৳)</label></div>
+              <div class="field"><input type="number" id="i-fee-b2024" placeholder=" " min="0" /><label for="i-fee-b2024">Fee: Batch 2024 (৳)</label></div>
+            </div>
+            <div class="info-fee-grid">
+              <div class="field"><input type="text" id="i-bk-name1" placeholder=" " maxlength="40" /><label for="i-bk-name1">Bkash name 1</label></div>
+              <div class="field"><input type="text" id="i-bk-num1" placeholder=" " maxlength="20" /><label for="i-bk-num1">Bkash number 1</label></div>
+              <div class="field"><input type="text" id="i-bk-name2" placeholder=" " maxlength="40" /><label for="i-bk-name2">Bkash name 2</label></div>
+              <div class="field"><input type="text" id="i-bk-num2" placeholder=" " maxlength="20" /><label for="i-bk-num2">Bkash number 2</label></div>
+            </div>
+            <div class="edit-form-actions">
+              <button type="submit" class="btn btn-primary"><span class="btn-label">Save info</span><span class="btn-spinner"></span></button>
+              <button type="button" class="btn btn-cancel" id="info-cancel">Cancel</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="admin-card reg-card">
+          <h2>Player registration</h2>
+          <p class="admin-sub">All fields are required. Your photo is kept with your registration.</p>
+          <form id="reg-form">
+            <div class="field">
+              <input type="text" id="r-name" placeholder=" " required maxlength="30" autocapitalize="words" />
+              <label for="r-name">Full name</label>
+            </div>
+            <div class="field field-select">
+              <select id="r-position" required>
+                <option value="" disabled selected hidden></option>
+                <option>Goalkeeper</option>
+                <option>Defender</option>
+                <option>Midfielder</option>
+                <option>Forward</option>
+              </select>
+              <label for="r-position">Position</label>
+            </div>
+            <div class="field field-select">
+              <select id="r-batch" required>
+                <option value="" disabled selected hidden></option>
+                <option value="b2021">Batch 2021 onwards</option>
+                <option value="b2022">Batch 2022</option>
+                <option value="b2023">Batch 2023</option>
+                <option value="b2024">Batch 2024</option>
+              </select>
+              <label for="r-batch">Batch</label>
+            </div>
+            <div class="photo-pick" id="reg-photo-pick">
+              <div class="photo-preview" id="reg-photo-preview">📷</div>
+              <div class="photo-pick-text">
+                <button type="button" class="photo-btn" id="reg-photo-btn">Upload your photo</button>
+                <span class="photo-note">required — shown next to your name</span>
+              </div>
+              <button type="button" class="photo-clear hidden" id="reg-photo-clear" title="Remove photo">✕</button>
+              <input type="file" id="reg-photo-input" accept="image/*" hidden />
+            </div>
+            <div class="field">
+              <input type="text" id="r-txn" placeholder=" " required maxlength="40" spellcheck="false" />
+              <label for="r-txn">Bkash transaction ID</label>
+            </div>
+            <button type="submit" class="btn btn-primary" id="reg-btn">
+              <span class="btn-label">Register for Season 4</span>
+              <span class="btn-spinner"></span>
+            </button>
+          </form>
+        </div>
+      </section>
+
+      <!-- 2) Registered players -->
+      <section id="sub-players" class="subview hidden">
+        <div class="stats-hero">
+          <div class="stat-tile">
+            <div class="tile-label">Total players</div>
+            <div class="tile-num" id="tile-regs">0</div>
+            <div class="tile-sub">registered for Season 4</div>
+          </div>
+          <div class="stat-tile admin-only hidden fees-tile">
+            <div class="tile-label">Fees collected 👑</div>
+            <div class="tile-num" id="tile-fees">৳0</div>
+            <div class="tile-sub" id="tile-fees-sub">admins only</div>
+          </div>
+        </div>
+        <div class="admin-card">
+          <h2>Registered players <span class="members-count" id="regs-count"></span></h2>
+          <p class="admin-sub">Everyone who has completed Season 4 registration.</p>
+          <div id="regs-list" class="members-list"></div>
+          <p class="edit-empty hidden" id="regs-empty">No registrations yet — be the first!</p>
+        </div>
+      </section>
+
+      <!-- 3) Tournament table -->
+      <section id="sub-table" class="subview hidden">
+        <div class="admin-card admin-only hidden team-add-card">
+          <h2>Add a team</h2>
+          <p class="admin-sub">Enter results per team — points and ranking are calculated automatically (win 3 · draw 1 · loss 0).</p>
+          <form id="team-form" class="team-form">
+            <div class="field">
+              <input type="text" id="t-name" placeholder=" " required maxlength="40" />
+              <label for="t-name">Team name</label>
+            </div>
+            <button type="submit" class="btn btn-primary" id="team-btn">
+              <span class="btn-label">Add team</span>
+              <span class="btn-spinner"></span>
+            </button>
+          </form>
+        </div>
+        <div class="admin-card">
+          <h2>Season 4 table</h2>
+          <p class="admin-sub">Ranked by points, then goal difference.</p>
+          <div class="table-wrap">
+            <table class="league-table">
+              <thead>
+                <tr><th class="th-pos">#</th><th class="th-team">Team</th><th>P</th><th>W</th><th>D</th><th>L</th><th>GD</th><th class="th-pts">Pts</th><th class="th-act admin-only hidden"></th></tr>
+              </thead>
+              <tbody id="table-body"></tbody>
+            </table>
+          </div>
+          <p class="edit-empty hidden" id="table-empty">No teams yet.</p>
+        </div>
+      </section>
+
+      <!-- 4) Auction -->
+      <section id="sub-auction" class="subview hidden">
+        <div class="admin-card auction-card">
+          <h2>🔨 Player auction</h2>
+          <p class="admin-sub">Every registered player enters the auction automatically.</p>
+
+          <div id="auction-stage" class="auction-stage hidden">
+            <div class="auction-nav">
+              <button type="button" id="auc-prev" class="auc-arrow" title="Previous player">‹</button>
+              <div class="auction-player" id="auction-player">
+                <div class="auction-photo" id="auc-photo"></div>
+                <div class="auction-name" id="auc-name"></div>
+                <div class="auction-meta" id="auc-meta"></div>
+                <div class="auction-status" id="auc-status"></div>
+              </div>
+              <button type="button" id="auc-next" class="auc-arrow" title="Next player">›</button>
+            </div>
+            <div class="auction-counter" id="auc-counter"></div>
+
+            <div class="auction-teams-wrap admin-only hidden">
+              <h3 class="auction-teams-title">Sell to team</h3>
+              <div class="auction-teams" id="auc-teams"></div>
+            </div>
+          </div>
+          <p class="edit-empty hidden" id="auction-empty">No registered players yet — the auction fills up as players register.</p>
+        </div>
+
+        <div class="admin-card">
+          <h2>Teamsheets</h2>
+          <p class="admin-sub">Squads build up live as players are sold.</p>
+          <div id="teamsheets" class="teamsheets"></div>
+          <p class="edit-empty hidden" id="teamsheets-empty">No teams yet — admins add them in the Table tab.</p>
+        </div>
+      </section>
     </main>
 
     <!-- Members view (everyone) -->

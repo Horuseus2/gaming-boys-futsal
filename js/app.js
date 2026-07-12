@@ -1,7 +1,7 @@
 import { db, ensureFirebaseSession } from "./firebase.js";
 import {
   collection, doc, query, where, orderBy, onSnapshot,
-  getDoc, getDocs, getCountFromServer, addDoc, deleteDoc, updateDoc,
+  getDoc, getDocs, getCountFromServer, addDoc, deleteDoc, updateDoc, setDoc,
   runTransaction, serverTimestamp, Timestamp
 } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
@@ -40,6 +40,39 @@ let countdownTimer = null;
 
 const usersCol = collection(db, "users");
 const sessionsCol = collection(db, "sessions");
+
+/* ---- Tournament (GB Futsal Season 4) ---- */
+const regsCol = collection(db, "tournamentRegs");
+const teamsCol = collection(db, "tournamentTeams");
+const tourneyConfigRef = doc(db, "tournament", "season4");
+let unsubscribeRegs = null;
+let unsubscribeTeams = null;
+let unsubscribeTourneyConfig = null;
+let regsDocs = [];    // latest tournamentRegs snapshot
+let teamsDocs = [];   // latest tournamentTeams snapshot
+let editingRegId = null;   // registration open in the admin inline editor
+let editingTeamId = null;  // team row open in the admin inline editor
+
+const BATCHES = [
+  { key: "b2021", label: "Batch 2021 onwards" },
+  { key: "b2022", label: "Batch 2022" },
+  { key: "b2023", label: "Batch 2023" },
+  { key: "b2024", label: "Batch 2024" }
+];
+const batchLabel = key => BATCHES.find(b => b.key === key)?.label || key;
+const POSITIONS = ["Goalkeeper", "Defender", "Midfielder", "Forward"];
+
+const TOURNEY_DEFAULTS = {
+  dateText: "Saturday (18th July) 4:30PM",
+  deadlineText: "Tuesday (14th July) 6:00 PM",
+  locationText: "Bashundhara Sports City",
+  fees: { b2021: null, b2022: null, b2023: null, b2024: null },
+  bkash: [
+    { name: "Rezwan Talha", number: "01590097375" },
+    { name: "Rakin Ahmed", number: "01997892233" }
+  ]
+};
+let tourneyConfig = structuredClone(TOURNEY_DEFAULTS);
 
 /* ==========================================================================
    Small helpers
@@ -299,8 +332,15 @@ $("#logout-btn").addEventListener("click", () => {
   if (unsubscribeFeed) { unsubscribeFeed(); unsubscribeFeed = null; }
   if (unsubscribeMembers) { unsubscribeMembers(); unsubscribeMembers = null; }
   if (unsubscribeStats) { unsubscribeStats(); unsubscribeStats = null; }
+  if (unsubscribeRegs) { unsubscribeRegs(); unsubscribeRegs = null; }
+  if (unsubscribeTeams) { unsubscribeTeams(); unsubscribeTeams = null; }
+  if (unsubscribeTourneyConfig) { unsubscribeTourneyConfig(); unsubscribeTourneyConfig = null; }
   allSessions = [];
   membersDocs = [];
+  regsDocs = [];
+  teamsDocs = [];
+  editingRegId = null;
+  editingTeamId = null;
   clearInterval(countdownTimer);
   cardEls.clear();
   sessionsCache.clear();
@@ -338,6 +378,9 @@ function applyRoleUI() {
     ? "Head to the Admin tab to create the first session."
     : "Check back soon — the next game will show up here.";
   if (currentUser.role === "admin") renderEditList();
+  renderRegs();
+  renderTable();
+  renderAuction();
   positionTabInk();
 }
 
@@ -348,6 +391,7 @@ function enterApp() {
   startFeed();
   startMembers();
   startStats();
+  startTournament();
 }
 
 /* ------------------ Tabs ------------------ */
@@ -360,7 +404,7 @@ function positionTabInk() {
 }
 window.addEventListener("resize", positionTabInk);
 
-const VIEWS = { feed: "#view-feed", stats: "#view-stats", members: "#view-members", admin: "#view-admin" };
+const VIEWS = { feed: "#view-feed", tourney: "#view-tourney", stats: "#view-stats", members: "#view-members", admin: "#view-admin" };
 
 $("#tabs").addEventListener("click", (e) => {
   const tab = e.target.closest(".tab");
@@ -1176,6 +1220,561 @@ async function deleteSession(id, location) {
     console.error(err);
     toast("Delete failed.", true);
   }
+}
+
+/* ==========================================================================
+   Tournament — GB Futsal Season 4
+   ========================================================================== */
+
+/* ---- sub-tabs ---- */
+$("#tourney-subtabs").addEventListener("click", (e) => {
+  const sub = e.target.closest(".subtab");
+  if (!sub || sub.classList.contains("active")) return;
+  $$(".subtab").forEach(s => s.classList.remove("active"));
+  sub.classList.add("active");
+  $$(".subview").forEach(v => v.classList.add("hidden"));
+  const showEl = $(`#sub-${sub.dataset.sub}`);
+  showEl.classList.remove("hidden");
+  showEl.classList.add("entering");
+  showEl.addEventListener("animationend", () => showEl.classList.remove("entering"), { once: true });
+  if (sub.dataset.sub === "players") {
+    ["#tile-regs", "#tile-fees"].forEach(sel => { $(sel)._shown = 0; });
+    renderRegs();
+  }
+});
+
+/* ---- listeners ---- */
+function startTournament() {
+  if (unsubscribeTourneyConfig) unsubscribeTourneyConfig();
+  unsubscribeTourneyConfig = onSnapshot(tourneyConfigRef, (snap) => {
+    tourneyConfig = { ...structuredClone(TOURNEY_DEFAULTS), ...(snap.exists() ? snap.data() : {}) };
+    tourneyConfig.fees = { ...TOURNEY_DEFAULTS.fees, ...(tourneyConfig.fees || {}) };
+    renderInfo();
+    renderRegs(); // fees tile depends on config
+  }, (err) => console.error("tourney config:", err));
+
+  if (unsubscribeRegs) unsubscribeRegs();
+  unsubscribeRegs = onSnapshot(query(regsCol, orderBy("createdAt", "asc")), (snap) => {
+    regsDocs = snap.docs;
+    renderRegs();
+    renderAuction();
+  }, (err) => console.error("regs listener:", err));
+
+  if (unsubscribeTeams) unsubscribeTeams();
+  unsubscribeTeams = onSnapshot(teamsCol, (snap) => {
+    teamsDocs = snap.docs;
+    renderTable();
+    renderAuction();
+  }, (err) => console.error("teams listener:", err));
+}
+
+/* ---- 1) tournament info (admin-editable) ---- */
+function feeText(v) {
+  return typeof v === "number" && v > 0 ? `৳${v.toLocaleString()}` : "TBA";
+}
+
+function renderInfo() {
+  const c = tourneyConfig;
+  const disp = $("#info-display");
+  disp.innerHTML = `
+    <div class="cup-info-row">📅 <b>DATE:</b> <span></span></div>
+    <div class="cup-info-row deadline-row">⏳ <b>Registration deadline:</b> <span></span></div>
+    <div class="cup-info-row">📍 <b>Location:</b> <span></span></div>
+    <div class="cup-info-block"><b>Registration Fee:</b><ul class="cup-list" id="fee-list"></ul></div>
+    <div class="cup-info-block"><b>Bkash —</b><ul class="cup-list" id="bkash-list"></ul></div>
+    <p class="cup-note">Please put your name in the reference.</p>`;
+  const spans = disp.querySelectorAll(".cup-info-row span");
+  spans[0].textContent = c.dateText;
+  spans[1].textContent = c.deadlineText;
+  spans[2].textContent = c.locationText;
+  const feeList = $("#fee-list", disp);
+  BATCHES.forEach(b => {
+    const li = document.createElement("li");
+    li.textContent = `${b.label.replace("Batch ", "Batch – ")}: `;
+    const val = document.createElement("span");
+    val.className = "fee-val";
+    val.textContent = feeText(c.fees[b.key]);
+    li.appendChild(val);
+    feeList.appendChild(li);
+  });
+  const bkList = $("#bkash-list", disp);
+  (c.bkash || []).forEach(p => {
+    const li = document.createElement("li");
+    li.textContent = `${p.name}: `;
+    const num = document.createElement("b");
+    num.textContent = p.number;
+    li.appendChild(num);
+    bkList.appendChild(li);
+  });
+}
+
+$("#info-edit-btn").addEventListener("click", () => {
+  const form = $("#info-form");
+  const open = form.classList.toggle("hidden");
+  $("#info-edit-btn").textContent = open ? "Edit info" : "Close";
+  if (!open) {
+    const c = tourneyConfig;
+    $("#i-date").value = c.dateText;
+    $("#i-deadline").value = c.deadlineText;
+    $("#i-location").value = c.locationText;
+    BATCHES.forEach(b => { $(`#i-fee-${b.key}`).value = c.fees[b.key] ?? ""; });
+    $("#i-bk-name1").value = c.bkash?.[0]?.name || "";
+    $("#i-bk-num1").value = c.bkash?.[0]?.number || "";
+    $("#i-bk-name2").value = c.bkash?.[1]?.name || "";
+    $("#i-bk-num2").value = c.bkash?.[1]?.number || "";
+  }
+});
+$("#info-cancel").addEventListener("click", () => {
+  $("#info-form").classList.add("hidden");
+  $("#info-edit-btn").textContent = "Edit info";
+});
+
+$("#info-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (currentUser?.role !== "admin") return;
+  const fees = {};
+  BATCHES.forEach(b => {
+    const v = parseInt($(`#i-fee-${b.key}`).value, 10);
+    fees[b.key] = Number.isFinite(v) && v >= 0 ? v : null;
+  });
+  const bkash = [
+    { name: normalizeName($("#i-bk-name1").value), number: $("#i-bk-num1").value.trim() },
+    { name: normalizeName($("#i-bk-name2").value), number: $("#i-bk-num2").value.trim() }
+  ].filter(p => p.name && p.number);
+  const btn = $("#info-form .btn-primary");
+  setLoading(btn, true);
+  try {
+    await setDoc(tourneyConfigRef, {
+      dateText: normalizeName($("#i-date").value),
+      deadlineText: normalizeName($("#i-deadline").value),
+      locationText: normalizeName($("#i-location").value),
+      fees, bkash
+    }, { merge: true });
+    $("#info-form").classList.add("hidden");
+    $("#info-edit-btn").textContent = "Edit info";
+    toast("Tournament info updated ✏️");
+  } catch (err) {
+    console.error(err);
+    toast("Could not save info.", true);
+  } finally {
+    setLoading(btn, false);
+  }
+});
+
+/* ---- registration form ---- */
+let pendingRegPhoto = null;
+const regPhotoInput = $("#reg-photo-input");
+$("#reg-photo-btn").addEventListener("click", () => regPhotoInput.click());
+regPhotoInput.addEventListener("change", async () => {
+  const file = regPhotoInput.files[0];
+  regPhotoInput.value = "";
+  if (!file) return;
+  try {
+    pendingRegPhoto = await fileToPhoto(file);
+    $("#reg-photo-preview").innerHTML = `<img src="${pendingRegPhoto}" alt="preview" />`;
+    $("#reg-photo-btn").textContent = "Change photo";
+    $("#reg-photo-clear").classList.remove("hidden");
+  } catch {
+    toast("Couldn't read that image — try another one.", true);
+  }
+});
+$("#reg-photo-clear").addEventListener("click", () => {
+  pendingRegPhoto = null;
+  $("#reg-photo-preview").innerHTML = "📷";
+  $("#reg-photo-btn").textContent = "Upload your photo";
+  $("#reg-photo-clear").classList.add("hidden");
+});
+
+$("#reg-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = normalizeName($("#r-name").value);
+  const position = $("#r-position").value;
+  const batch = $("#r-batch").value;
+  const txn = $("#r-txn").value.trim();
+
+  if (name.length < 2) return toast("Enter your full name.", true);
+  if (!POSITIONS.includes(position)) return toast("Pick your position.", true);
+  if (!BATCHES.some(b => b.key === batch)) return toast("Pick your batch.", true);
+  if (!pendingRegPhoto) return toast("Your photo is required.", true);
+  if (txn.length < 4) return toast("Enter the Bkash transaction ID.", true);
+  if (regsDocs.some(d => d.data().name.toLowerCase() === name.toLowerCase()))
+    return toast(`${name} is already registered.`, true);
+
+  const btn = $("#reg-btn");
+  setLoading(btn, true);
+  try {
+    await addDoc(regsCol, {
+      name, position, batch, txn, photo: pendingRegPhoto,
+      submittedBy: currentUser.name, createdAt: serverTimestamp()
+    });
+    e.target.reset();
+    $("#reg-photo-clear").click();
+    toast(`${name} registered for Season 4! 🏆`);
+  } catch (err) {
+    console.error(err);
+    toast("Registration failed — try again.", true);
+  } finally {
+    setLoading(btn, false);
+  }
+});
+
+/* ---- 2) registered players ---- */
+function renderRegs() {
+  if (!currentUser) return;
+  const list = $("#regs-list");
+  if (!list) return;
+
+  animateNumber($("#tile-regs"), regsDocs.length);
+  $("#regs-count").textContent = regsDocs.length;
+  $("#regs-empty").classList.toggle("hidden", regsDocs.length > 0);
+
+  // Admin-only: fees collected = per-batch fee × registrations of that batch
+  if (currentUser.role === "admin") {
+    const total = regsDocs.reduce((sum, d) =>
+      sum + (tourneyConfig.fees[d.data().batch] || 0), 0);
+    animateNumber($("#tile-fees"), total, n => `৳${n.toLocaleString()}`);
+    const unset = BATCHES.filter(b => !(tourneyConfig.fees[b.key] > 0)).length;
+    $("#tile-fees-sub").textContent = unset
+      ? `${unset} batch fee${unset > 1 ? "s" : ""} not set yet`
+      : "all batch fees set";
+  }
+
+  list.innerHTML = "";
+  // Captains float to the top of the list
+  const sorted = [...regsDocs].sort((a, b) =>
+    (b.data().captain === true) - (a.data().captain === true));
+  sorted.forEach((d, i) => {
+    const r = d.data();
+    const row = document.createElement("div");
+    row.className = "member-row" + (r.captain ? " captain" : "");
+    row.style.setProperty("--stagger", `${Math.min(i, 10) * 0.05}s`);
+
+    if (editingRegId === d.id) {
+      row.appendChild(regEditForm(d));
+      list.appendChild(row);
+      return;
+    }
+
+    row.innerHTML = `
+      <div class="member-avatar"></div>
+      <div class="member-info">
+        <div class="member-name"></div>
+        <div class="member-joined reg-batch"></div>
+      </div>
+      <div class="actions"><span class="reg-pos"></span></div>`;
+    setAvatar($(".member-avatar", row), r.photo, r.name);
+    const nameEl = $(".member-name", row);
+    nameEl.textContent = r.name;
+    if (r.captain) {
+      const band = document.createElement("span");
+      band.className = "cap-badge";
+      band.textContent = "Ⓒ CAPTAIN";
+      nameEl.appendChild(band);
+    }
+    $(".reg-batch", row).textContent = batchLabel(r.batch);
+    $(".reg-pos", row).textContent = r.position;
+
+    if (currentUser.role === "admin") {
+      const actions = $(".actions", row);
+      const cap = document.createElement("button");
+      cap.className = "btn btn-role" + (r.captain ? " demote" : "");
+      cap.textContent = r.captain ? "Unmake captain" : "Make captain";
+      cap.addEventListener("click", async () => {
+        try {
+          await updateDoc(doc(db, "tournamentRegs", d.id), { captain: !r.captain });
+          toast(r.captain ? `${r.name} is no longer captain.` : `${r.name} is now a captain Ⓒ`);
+        } catch (err) { console.error(err); toast("Could not update captain.", true); }
+      });
+      const edit = document.createElement("button");
+      edit.className = "btn btn-role";
+      edit.textContent = "Edit";
+      edit.addEventListener("click", () => { editingRegId = d.id; renderRegs(); });
+      actions.append(cap);
+      const del = document.createElement("button");
+      del.className = "btn btn-role demote";
+      del.textContent = "✕";
+      del.title = "Remove registration";
+      del.addEventListener("click", async () => {
+        if (!confirm(`Remove ${r.name}'s registration?`)) return;
+        try { await deleteDoc(doc(db, "tournamentRegs", d.id)); toast(`${r.name} removed.`); }
+        catch (err) { console.error(err); toast("Delete failed.", true); }
+      });
+      actions.append(edit, del);
+    }
+    list.appendChild(row);
+  });
+}
+
+function regEditForm(d) {
+  const r = d.data();
+  const form = document.createElement("form");
+  form.className = "edit-form reg-edit-form";
+  form.innerHTML = `
+    <div class="field"><input type="text" class="re-name" placeholder=" " required maxlength="30" /><label>Name</label></div>
+    <div class="field field-select">
+      <select class="re-position">${POSITIONS.map(p => `<option>${p}</option>`).join("")}</select>
+      <label>Position</label>
+    </div>
+    <div class="field field-select">
+      <select class="re-batch">${BATCHES.map(b => `<option value="${b.key}">${b.label}</option>`).join("")}</select>
+      <label>Batch</label>
+    </div>
+    <div class="field"><input type="text" class="re-txn" placeholder=" " required maxlength="40" /><label>Bkash transaction ID</label></div>
+    <div class="edit-form-actions">
+      <button type="submit" class="btn btn-primary"><span class="btn-label">Save</span><span class="btn-spinner"></span></button>
+      <button type="button" class="btn btn-cancel">Cancel</button>
+    </div>`;
+  $(".re-name", form).value = r.name;
+  $(".re-position", form).value = r.position;
+  $(".re-batch", form).value = r.batch;
+  $(".re-txn", form).value = r.txn;
+  $(".btn-cancel", form).addEventListener("click", () => { editingRegId = null; renderRegs(); });
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = normalizeName($(".re-name", form).value);
+    const txn = $(".re-txn", form).value.trim();
+    if (name.length < 2 || txn.length < 4) return toast("Fill every field.", true);
+    try {
+      await updateDoc(doc(db, "tournamentRegs", d.id), {
+        name, position: $(".re-position", form).value,
+        batch: $(".re-batch", form).value, txn
+      });
+      editingRegId = null;
+      toast("Registration updated ✏️");
+    } catch (err) {
+      console.error(err);
+      toast("Update failed.", true);
+    }
+  });
+  return form;
+}
+
+/* ---- 3) tournament table ---- */
+$("#team-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (currentUser?.role !== "admin") return;
+  const name = normalizeName($("#t-name").value);
+  if (name.length < 2) return toast("Enter a team name.", true);
+  if (teamsDocs.some(d => d.data().name.toLowerCase() === name.toLowerCase()))
+    return toast("That team already exists.", true);
+  const btn = $("#team-btn");
+  setLoading(btn, true);
+  try {
+    await addDoc(teamsCol, { name, wins: 0, draws: 0, losses: 0, gd: 0, createdAt: serverTimestamp() });
+    e.target.reset();
+    toast(`${name} added to the table ⚽`);
+  } catch (err) {
+    console.error(err);
+    toast("Could not add team.", true);
+  } finally {
+    setLoading(btn, false);
+  }
+});
+
+function renderTable() {
+  if (!currentUser) return;
+  const body = $("#table-body");
+  if (!body) return;
+  const isAdmin = currentUser.role === "admin";
+
+  const rows = teamsDocs.map(d => {
+    const t = d.data();
+    const wins = t.wins || 0, draws = t.draws || 0, losses = t.losses || 0, gd = t.gd || 0;
+    return {
+      id: d.id, name: t.name, wins, draws, losses, gd,
+      played: wins + draws + losses,
+      pts: wins * 3 + draws // win 3 · draw 1 · loss 0
+    };
+  }).sort((a, b) => b.pts - a.pts || b.gd - a.gd || a.name.localeCompare(b.name));
+
+  $("#table-empty").classList.toggle("hidden", rows.length > 0);
+  body.innerHTML = "";
+
+  rows.forEach((t, i) => {
+    const tr = document.createElement("tr");
+    tr.style.setProperty("--stagger", `${Math.min(i, 10) * 0.04}s`);
+
+    const cells = [`<td>${i + 1}</td>`, `<td class="t-name th-team"></td>`];
+    if (isAdmin) {
+      cells.push(`<td>${t.played}</td>`);
+      ["wins", "draws", "losses", "gd"].forEach(f => {
+        cells.push(`<td><input type="number" class="t-input" data-field="${f}" ${f === "gd" ? "" : 'min="0"'} max="999" min="-999" value="${t[f]}" /></td>`);
+      });
+      cells.push(`<td class="t-pts">${t.pts}</td>`);
+      cells.push(`<td><button type="button" class="t-del-btn" title="Delete team">✕</button></td>`);
+    } else {
+      cells.push(`<td>${t.played}</td><td>${t.wins}</td><td>${t.draws}</td><td>${t.losses}</td><td>${t.gd > 0 ? "+" + t.gd : t.gd}</td><td class="t-pts">${t.pts}</td>`);
+    }
+    tr.innerHTML = cells.join("");
+    $(".t-name", tr).textContent = t.name;
+
+    if (isAdmin) {
+      $$(".t-input", tr).forEach(input => {
+        input.addEventListener("change", async () => {
+          const f = input.dataset.field;
+          let v = parseInt(input.value, 10);
+          if (!Number.isFinite(v)) v = 0;
+          if (f !== "gd" && v < 0) v = 0;
+          try {
+            await updateDoc(doc(db, "tournamentTeams", t.id), { [f]: v });
+          } catch (err) {
+            console.error(err);
+            toast("Could not save result.", true);
+          }
+        });
+      });
+      $(".t-del-btn", tr).addEventListener("click", async () => {
+        if (!confirm(`Delete team "${t.name}"?`)) return;
+        try { await deleteDoc(doc(db, "tournamentTeams", t.id)); toast(`${t.name} deleted.`); }
+        catch (err) { console.error(err); toast("Delete failed.", true); }
+      });
+    }
+    body.appendChild(tr);
+  });
+}
+
+/* ---- 4) auction ---- */
+let auctionIndex = 0;
+
+$("#auc-prev").addEventListener("click", () => moveAuction(-1));
+$("#auc-next").addEventListener("click", () => moveAuction(1));
+function moveAuction(dir) {
+  if (!regsDocs.length) return;
+  auctionIndex = (auctionIndex + dir + regsDocs.length) % regsDocs.length;
+  const p = $("#auction-player");
+  p.classList.remove("swap");
+  void p.offsetWidth; // restart the swap animation
+  p.classList.add("swap");
+  renderAuction();
+}
+
+function renderAuction() {
+  if (!currentUser) return;
+  const stage = $("#auction-stage");
+  if (!stage) return;
+
+  $("#auction-empty").classList.toggle("hidden", regsDocs.length > 0);
+  stage.classList.toggle("hidden", regsDocs.length === 0);
+
+  if (regsDocs.length) {
+    auctionIndex = Math.min(auctionIndex, regsDocs.length - 1);
+    const d = regsDocs[auctionIndex];
+    const r = d.data();
+
+    setAvatar($("#auc-photo"), r.photo, r.name);
+    const nameEl = $("#auc-name");
+    nameEl.textContent = r.name;
+    if (r.captain) {
+      const band = document.createElement("span");
+      band.className = "cap-badge";
+      band.textContent = "Ⓒ";
+      nameEl.appendChild(band);
+    }
+    $("#auc-meta").textContent = `${r.position} · ${batchLabel(r.batch)}`;
+    $("#auc-counter").textContent = `${auctionIndex + 1} / ${regsDocs.length}`;
+
+    // status: sold / unsold
+    const status = $("#auc-status");
+    status.innerHTML = "";
+    const soldTeam = teamsDocs.find(t => t.id === r.teamId);
+    if (soldTeam) {
+      const tag = document.createElement("span");
+      tag.className = "sold-tag";
+      tag.textContent = `SOLD → ${soldTeam.data().name}`;
+      if (currentUser.role === "admin") {
+        const un = document.createElement("button");
+        un.type = "button";
+        un.className = "sold-unassign";
+        un.title = "Unassign";
+        un.textContent = "✕";
+        un.addEventListener("click", () => assignPlayer(d.id, null, r.name));
+        tag.appendChild(un);
+      }
+      status.appendChild(tag);
+    } else {
+      const tag = document.createElement("span");
+      tag.className = "unsold-tag";
+      tag.textContent = "Not sold yet";
+      status.appendChild(tag);
+    }
+
+    // admin: team buttons under the player
+    const picks = $("#auc-teams");
+    picks.innerHTML = "";
+    teamsDocs.forEach(t => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "team-pick" + (t.id === r.teamId ? " current" : "");
+      btn.textContent = t.data().name;
+      btn.addEventListener("click", () =>
+        assignPlayer(d.id, t.id === r.teamId ? null : t.id, r.name, t.data().name));
+      picks.appendChild(btn);
+    });
+    if (!teamsDocs.length) {
+      picks.innerHTML = `<span class="ts-empty">No teams yet — add them in the Table tab.</span>`;
+    }
+  }
+
+  renderTeamsheets();
+}
+
+async function assignPlayer(regId, teamId, playerName, teamName) {
+  if (currentUser.role !== "admin") return;
+  try {
+    await updateDoc(doc(db, "tournamentRegs", regId), { teamId: teamId || null });
+    toast(teamId ? `${playerName} sold to ${teamName}! 🔨` : `${playerName} unassigned.`);
+  } catch (err) {
+    console.error(err);
+    toast("Could not assign player.", true);
+  }
+}
+
+function renderTeamsheets() {
+  const wrap = $("#teamsheets");
+  if (!wrap) return;
+  $("#teamsheets-empty").classList.toggle("hidden", teamsDocs.length > 0);
+  wrap.innerHTML = "";
+
+  teamsDocs.forEach((t, i) => {
+    const squad = regsDocs.filter(d => d.data().teamId === t.id)
+      .sort((a, b) => (b.data().captain === true) - (a.data().captain === true));
+    const card = document.createElement("div");
+    card.className = "teamsheet";
+    card.style.setProperty("--stagger", `${Math.min(i, 8) * 0.06}s`);
+
+    const h = document.createElement("h3");
+    h.textContent = t.data().name;
+    const count = document.createElement("span");
+    count.className = "ts-count";
+    count.textContent = squad.length;
+    h.appendChild(count);
+    card.appendChild(h);
+
+    const list = document.createElement("div");
+    list.className = "ts-players";
+    if (!squad.length) {
+      list.innerHTML = `<span class="ts-empty">No players yet</span>`;
+    } else {
+      squad.forEach(d => {
+        const r = d.data();
+        const row = document.createElement("div");
+        row.className = "ts-player";
+        const av = document.createElement("div");
+        av.className = "ts-avatar";
+        setAvatar(av, r.photo, r.name);
+        const nm = document.createElement("span");
+        nm.className = "ts-name" + (r.captain ? " is-cap" : "");
+        nm.textContent = r.captain ? `${r.name} Ⓒ` : r.name;
+        const pos = document.createElement("span");
+        pos.className = "ts-pos";
+        pos.textContent = r.position.slice(0, 3);
+        row.append(av, nm, pos);
+        list.appendChild(row);
+      });
+    }
+    card.appendChild(list);
+    wrap.appendChild(card);
+  });
 }
 
 /* ==========================================================================
