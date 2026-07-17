@@ -196,6 +196,7 @@
         <button class="subtab active" data-sub="reg">Registration</button>
         <button class="subtab" data-sub="players">Players</button>
         <button class="subtab" data-sub="table">Table</button>
+        <button class="subtab" data-sub="fixtures">Fixtures</button>
         <button class="subtab" data-sub="auction">Auction</button>
       </nav>
 
@@ -315,7 +316,7 @@
       <section id="sub-table" class="subview hidden">
         <div class="admin-card admin-only hidden team-add-card">
           <h2>Add a team</h2>
-          <p class="admin-sub">Enter results per team — points and ranking are calculated automatically (win 3 · draw 1 · loss 0).</p>
+          <p class="admin-sub">Teams play in the Fixtures tab — the table fills itself from finished matches (win 3 · draw 1 · loss 0).</p>
           <form id="team-form" class="team-form">
             <div class="field">
               <input type="text" id="t-name" placeholder=" " required maxlength="40" />
@@ -333,7 +334,7 @@
         </div>
         <div class="admin-card">
           <h2>Season 4 table</h2>
-          <p class="admin-sub">Ranked by points, then goal difference.</p>
+          <p class="admin-sub">Auto-calculated from fixtures marked full-time. Ranked by points, then goal difference.</p>
           <div class="table-wrap">
             <table class="league-table">
               <thead>
@@ -343,6 +344,53 @@
             </table>
           </div>
           <p class="edit-empty hidden" id="table-empty">No teams yet.</p>
+        </div>
+      </section>
+
+      <!-- Fixtures & golden races -->
+      <section id="sub-fixtures" class="subview hidden">
+        <div class="admin-card admin-only hidden">
+          <h2>Add fixture</h2>
+          <p class="admin-sub">Create a match — enter the result any time after.</p>
+          <form id="fixture-form">
+            <div class="fixture-form-grid">
+              <div class="field field-select">
+                <select id="f-home" required></select>
+                <label>Home team</label>
+              </div>
+              <div class="field field-select">
+                <select id="f-away" required></select>
+                <label>Away team</label>
+              </div>
+            </div>
+            <div class="field">
+              <input type="text" id="f-label" placeholder=" " maxlength="60" />
+              <label for="f-label">Label (e.g. Match 1 · Friday 5PM) — optional</label>
+            </div>
+            <button type="submit" class="btn btn-primary" id="fixture-btn">
+              <span class="btn-label">Add fixture</span><span class="btn-spinner"></span>
+            </button>
+          </form>
+        </div>
+
+        <div class="admin-card">
+          <h2>📅 Fixtures &amp; results</h2>
+          <p class="admin-sub">Results, scorers and assists for every match.</p>
+          <div id="fixtures-list" class="fixtures-list"></div>
+          <p class="edit-empty hidden" id="fixtures-empty">No fixtures yet.</p>
+        </div>
+
+        <div class="race-grid">
+          <div class="admin-card race-card race-gold">
+            <h2>👑 Top scorers</h2>
+            <div id="scorers-race"></div>
+            <p class="edit-empty hidden" id="scorers-empty">No goals recorded yet.</p>
+          </div>
+          <div class="admin-card race-card race-cyan">
+            <h2>🎯 Most assists</h2>
+            <div id="assists-race"></div>
+            <p class="edit-empty hidden" id="assists-empty">No assists recorded yet.</p>
+          </div>
         </div>
       </section>
 

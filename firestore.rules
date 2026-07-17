@@ -94,6 +94,26 @@ service cloud.firestore {
       allow delete: if request.auth != null;
     }
 
+    // Season 4 fixtures: results + per-match goals/assists maps
+    match /tournamentFixtures/{fixtureId} {
+      allow read: if request.auth != null;
+      allow create, update: if request.auth != null
+        && request.resource.data.homeId is string
+        && request.resource.data.awayId is string
+        && (!('homeScore' in request.resource.data)
+            || request.resource.data.homeScore == null
+            || (request.resource.data.homeScore is int
+                && request.resource.data.homeScore >= 0))
+        && (!('awayScore' in request.resource.data)
+            || request.resource.data.awayScore == null
+            || (request.resource.data.awayScore is int
+                && request.resource.data.awayScore >= 0))
+        && (!('goals' in request.resource.data) || request.resource.data.goals is map)
+        && (!('assists' in request.resource.data) || request.resource.data.assists is map)
+        && (!('done' in request.resource.data) || request.resource.data.done is bool);
+      allow delete: if request.auth != null;
+    }
+
     // Season 4 league table teams
     match /tournamentTeams/{teamId} {
       allow read: if request.auth != null;

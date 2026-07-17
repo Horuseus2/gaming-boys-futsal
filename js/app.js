@@ -48,12 +48,15 @@ const sessionsCol = collection(db, "sessions");
 /* ---- Tournament (GB Futsal Season 4) ---- */
 const regsCol = collection(db, "tournamentRegs");
 const teamsCol = collection(db, "tournamentTeams");
+const fixturesCol = collection(db, "tournamentFixtures");
 const tourneyConfigRef = doc(db, "tournament", "season4");
 let unsubscribeRegs = null;
 let unsubscribeTeams = null;
 let unsubscribeTourneyConfig = null;
-let regsDocs = [];    // latest tournamentRegs snapshot
-let teamsDocs = [];   // latest tournamentTeams snapshot
+let unsubscribeFixtures = null;
+let regsDocs = [];     // latest tournamentRegs snapshot
+let teamsDocs = [];    // latest tournamentTeams snapshot
+let fixturesDocs = []; // latest tournamentFixtures snapshot
 let editingRegId = null;   // registration open in the admin inline editor
 let editingTeamId = null;  // team row open in the admin inline editor
 
@@ -340,6 +343,8 @@ $("#logout-btn").addEventListener("click", () => {
   if (unsubscribeRegs) { unsubscribeRegs(); unsubscribeRegs = null; }
   if (unsubscribeTeams) { unsubscribeTeams(); unsubscribeTeams = null; }
   if (unsubscribeTourneyConfig) { unsubscribeTourneyConfig(); unsubscribeTourneyConfig = null; }
+  if (unsubscribeFixtures) { unsubscribeFixtures(); unsubscribeFixtures = null; }
+  fixturesDocs = [];
   allSessions = [];
   membersDocs = [];
   regsDocs = [];
@@ -393,6 +398,7 @@ function applyRoleUI() {
   renderRegs();
   renderTable();
   renderAuction();
+  renderFixtures();
   positionTabInk();
 }
 
@@ -1287,6 +1293,7 @@ function startTournament() {
     regsDocs = snap.docs;
     renderRegs();
     renderAuction();
+    renderFixtures(); // player dropdowns + race avatars come from regs
   }, (err) => console.error("regs listener:", err));
 
   if (unsubscribeTeams) unsubscribeTeams();
@@ -1294,7 +1301,15 @@ function startTournament() {
     teamsDocs = snap.docs;
     renderTable();
     renderAuction();
+    renderFixtures();
   }, (err) => console.error("teams listener:", err));
+
+  if (unsubscribeFixtures) unsubscribeFixtures();
+  unsubscribeFixtures = onSnapshot(query(fixturesCol, orderBy("createdAt", "asc")), (snap) => {
+    fixturesDocs = snap.docs;
+    renderFixtures();
+    renderTable(); // standings derive from full-time fixtures
+  }, (err) => console.error("fixtures listener:", err));
 }
 
 /* ---- 1) tournament info (admin-editable) ---- */
@@ -1635,13 +1650,29 @@ function renderTable() {
   if (!body) return;
   const admin = isAdmin();
 
+  // Standings computed live from fixtures marked full-time (done + both scores)
+  const stats = new Map(teamsDocs.map(t => [t.id, { wins: 0, draws: 0, losses: 0, gf: 0, ga: 0 }]));
+  fixturesDocs.forEach(d => {
+    const f = d.data();
+    if (!f.done) return;
+    if (typeof f.homeScore !== "number" || typeof f.awayScore !== "number") return;
+    const h = stats.get(f.homeId), a = stats.get(f.awayId);
+    if (!h || !a) return;
+    h.gf += f.homeScore; h.ga += f.awayScore;
+    a.gf += f.awayScore; a.ga += f.homeScore;
+    if (f.homeScore > f.awayScore) { h.wins++; a.losses++; }
+    else if (f.homeScore < f.awayScore) { a.wins++; h.losses++; }
+    else { h.draws++; a.draws++; }
+  });
+
   const rows = teamsDocs.map(d => {
-    const t = d.data();
-    const wins = t.wins || 0, draws = t.draws || 0, losses = t.losses || 0, gd = t.gd || 0;
+    const s = stats.get(d.id);
     return {
-      id: d.id, name: t.name, wins, draws, losses, gd,
-      played: wins + draws + losses,
-      pts: wins * 3 + draws // win 3 · draw 1 · loss 0
+      id: d.id, name: d.data().name,
+      wins: s.wins, draws: s.draws, losses: s.losses,
+      gd: s.gf - s.ga,
+      played: s.wins + s.draws + s.losses,
+      pts: s.wins * 3 + s.draws // win 3 · draw 1 · loss 0
     };
   }).sort((a, b) => b.pts - a.pts || b.gd - a.gd || a.name.localeCompare(b.name));
 
@@ -1652,35 +1683,15 @@ function renderTable() {
     const tr = document.createElement("tr");
     tr.style.setProperty("--stagger", `${Math.min(i, 10) * 0.04}s`);
 
-    const cells = [`<td>${i + 1}</td>`, `<td class="t-name th-team"></td>`];
+    const cells = [`<td>${i + 1}</td>`, `<td class="t-name th-team"></td>`,
+      `<td>${t.played}</td><td>${t.wins}</td><td>${t.draws}</td><td>${t.losses}</td><td>${t.gd > 0 ? "+" + t.gd : t.gd}</td><td class="t-pts">${t.pts}</td>`];
     if (admin) {
-      cells.push(`<td>${t.played}</td>`);
-      ["wins", "draws", "losses", "gd"].forEach(f => {
-        cells.push(`<td><input type="number" class="t-input" data-field="${f}" ${f === "gd" ? "" : 'min="0"'} max="999" min="-999" value="${t[f]}" /></td>`);
-      });
-      cells.push(`<td class="t-pts">${t.pts}</td>`);
       cells.push(`<td><button type="button" class="t-del-btn" title="Delete team">✕</button></td>`);
-    } else {
-      cells.push(`<td>${t.played}</td><td>${t.wins}</td><td>${t.draws}</td><td>${t.losses}</td><td>${t.gd > 0 ? "+" + t.gd : t.gd}</td><td class="t-pts">${t.pts}</td>`);
     }
     tr.innerHTML = cells.join("");
     $(".t-name", tr).textContent = t.name;
 
     if (admin) {
-      $$(".t-input", tr).forEach(input => {
-        input.addEventListener("change", async () => {
-          const f = input.dataset.field;
-          let v = parseInt(input.value, 10);
-          if (!Number.isFinite(v)) v = 0;
-          if (f !== "gd" && v < 0) v = 0;
-          try {
-            await updateDoc(doc(db, "tournamentTeams", t.id), { [f]: v });
-          } catch (err) {
-            console.error(err);
-            toast("Could not save result.", true);
-          }
-        });
-      });
       $(".t-del-btn", tr).addEventListener("click", async () => {
         if (!confirm(`Delete team "${t.name}"?`)) return;
         try { await deleteDoc(doc(db, "tournamentTeams", t.id)); toast(`${t.name} deleted.`); }
@@ -1688,6 +1699,323 @@ function renderTable() {
       });
     }
     body.appendChild(tr);
+  });
+}
+
+/* ---- Fixtures & scorer/assist races ---- */
+$("#fixture-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (currentUser?.role !== "admin") return;
+  const homeId = $("#f-home").value, awayId = $("#f-away").value;
+  if (!homeId || !awayId) return toast("Pick both teams.", true);
+  if (homeId === awayId) return toast("A team can't play itself.", true);
+  const btn = $("#fixture-btn");
+  setLoading(btn, true);
+  try {
+    await addDoc(fixturesCol, {
+      homeId, awayId,
+      label: normalizeName($("#f-label").value) || "",
+      homeScore: null, awayScore: null,
+      goals: {}, assists: {},
+      createdAt: serverTimestamp()
+    });
+    $("#f-label").value = "";
+    toast("Fixture added 📅");
+  } catch (err) { console.error(err); toast("Could not add fixture.", true); }
+  finally { setLoading(btn, false); }
+});
+
+function teamName(id) {
+  const t = teamsDocs.find(x => x.id === id);
+  return t ? t.data().name : "—";
+}
+
+function statChips(container, fixtureDoc, kind, admin) {
+  const data = fixtureDoc.data()[kind] || {};
+  const names = Object.keys(data).sort((a, b) => data[b] - data[a]);
+  container.innerHTML = "";
+  if (!names.length) {
+    container.innerHTML = `<span class="fx-none">none yet</span>`;
+    return;
+  }
+  names.forEach(n => {
+    const chip = document.createElement("span");
+    chip.className = "fx-chip";
+    chip.innerHTML = `${kind === "goals" ? "⚽" : "👟"} `;
+    chip.append(n, " ");
+    const b = document.createElement("b");
+    b.textContent = `×${data[n]}`;
+    chip.appendChild(b);
+    if (admin) {
+      const rm = document.createElement("button");
+      rm.type = "button"; rm.textContent = "✕"; rm.title = "Remove";
+      rm.addEventListener("click", async () => {
+        const map = { ...(fixtureDoc.data()[kind] || {}) };
+        delete map[n];
+        try { await updateDoc(doc(db, "tournamentFixtures", fixtureDoc.id), { [kind]: map }); }
+        catch (err) { console.error(err); toast("Could not remove.", true); }
+      });
+      chip.appendChild(rm);
+    }
+    container.appendChild(chip);
+  });
+}
+
+function statAddRow(fixtureDoc, kind, playerNames) {
+  const row = document.createElement("div");
+  row.className = "fx-add-row";
+  const sel = document.createElement("select");
+  sel.innerHTML = `<option value="">${kind === "goals" ? "Scorer…" : "Assist by…"}</option>` +
+    playerNames.map(n => `<option>${n.replace(/</g, "&lt;")}</option>`).join("");
+  const num = document.createElement("input");
+  num.type = "number"; num.min = 1; num.max = 99; num.value = 1;
+  const add = document.createElement("button");
+  add.type = "button"; add.className = "btn btn-role"; add.textContent = "Add";
+  add.addEventListener("click", async () => {
+    const name = sel.value;
+    const n = parseInt(num.value, 10);
+    if (!name) return toast("Pick a player.", true);
+    if (!(n >= 1)) return toast("Count must be at least 1.", true);
+    const map = { ...(fixtureDoc.data()[kind] || {}) };
+    map[name] = n; // set exact count (re-add to correct)
+    try {
+      await updateDoc(doc(db, "tournamentFixtures", fixtureDoc.id), { [kind]: map });
+      toast(`${name}: ${n} ${kind === "goals" ? "goal" : "assist"}${n > 1 ? "s" : ""} ✔`);
+    } catch (err) { console.error(err); toast("Could not save.", true); }
+  });
+  row.append(sel, num, add);
+  return row;
+}
+
+function renderFixtures() {
+  const list = $("#fixtures-list");
+  if (!list || !currentUser) return;
+  // don't rebuild fixture cards under an admin mid-edit (scores, labels, stats)
+  if (list.contains(document.activeElement)) {
+    renderRaces();
+    renderTable();
+    return;
+  }
+  const admin = isAdmin();
+
+  // team selects in the add-fixture form
+  const opts = `<option value="">Select…</option>` +
+    teamsDocs.map(t => `<option value="${t.id}">${t.data().name.replace(/</g, "&lt;")}</option>`).join("");
+  ["#f-home", "#f-away"].forEach(sel => {
+    const el = $(sel);
+    if (el && document.activeElement !== el) {
+      const prev = el.value;
+      el.innerHTML = opts;
+      el.value = prev;
+    }
+  });
+
+  $("#fixtures-empty").classList.toggle("hidden", fixturesDocs.length > 0);
+  list.innerHTML = "";
+
+  fixturesDocs.forEach((d, i) => {
+    const f = d.data();
+    const card = document.createElement("div");
+    card.className = "fixture";
+    if (/🥇|grand final/i.test(f.label || "")) card.classList.add("final");
+    else if (/🥉|semi/i.test(f.label || "")) card.classList.add("semi");
+    card.style.setProperty("--stagger", `${Math.min(i, 8) * 0.05}s`);
+
+    // label row (admin: inline editable)
+    const labelRow = document.createElement("div");
+    labelRow.className = "fixture-label";
+    if (admin) {
+      const inp = document.createElement("input");
+      inp.value = f.label || "";
+      inp.placeholder = "match label…";
+      inp.addEventListener("change", async () => {
+        try { await updateDoc(doc(db, "tournamentFixtures", d.id), { label: inp.value.trim() }); }
+        catch (err) { console.error(err); toast("Could not save label.", true); }
+      });
+      const del = document.createElement("button");
+      del.className = "btn-icon btn-delete fx-del";
+      del.title = "Delete fixture";
+      del.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
+      del.addEventListener("click", async () => {
+        if (!confirm(`Delete fixture ${teamName(f.homeId)} vs ${teamName(f.awayId)}?`)) return;
+        try { await deleteDoc(doc(db, "tournamentFixtures", d.id)); toast("Fixture deleted."); }
+        catch (err) { console.error(err); toast("Delete failed.", true); }
+      });
+      labelRow.append(inp, del);
+    } else {
+      labelRow.textContent = f.label || `Match ${i + 1}`;
+    }
+    card.appendChild(labelRow);
+
+    // scoreline — admins pick/change the teams right on the card (fills the
+    // semi/final "—" slots once the group stage decides)
+    const scoreRow = document.createElement("div");
+    scoreRow.className = "fixture-score-row";
+    const teamCell = (side, cls) => {
+      const el = document.createElement("div");
+      el.className = `fx-team ${cls}`;
+      if (admin) {
+        const sel = document.createElement("select");
+        sel.className = "fx-team-sel";
+        sel.innerHTML = `<option value="">—</option>` +
+          teamsDocs.map(t => `<option value="${t.id}">${t.data().name.replace(/</g, "&lt;")}</option>`).join("");
+        sel.value = f[side] || "";
+        sel.addEventListener("change", async () => {
+          try { await updateDoc(doc(db, "tournamentFixtures", d.id), { [side]: sel.value }); }
+          catch (err) { console.error(err); toast("Could not set team.", true); }
+        });
+        el.appendChild(sel);
+      } else {
+        el.textContent = teamName(f[side]);
+      }
+      return el;
+    };
+    const home = teamCell("homeId", "home");
+    const away = teamCell("awayId", "away");
+    const mid = document.createElement("div");
+    mid.className = "fx-score";
+    const played = typeof f.homeScore === "number" && typeof f.awayScore === "number";
+    if (admin) {
+      const hs = document.createElement("input");
+      const as = document.createElement("input");
+      [hs, as].forEach(inp => { inp.type = "number"; inp.min = 0; inp.max = 99; inp.inputMode = "numeric"; });
+      hs.value = f.homeScore ?? ""; as.value = f.awayScore ?? "";
+      const save = async () => {
+        const hv = hs.value === "" ? null : Math.max(0, parseInt(hs.value, 10) || 0);
+        const av = as.value === "" ? null : Math.max(0, parseInt(as.value, 10) || 0);
+        try { await updateDoc(doc(db, "tournamentFixtures", d.id), { homeScore: hv, awayScore: av }); }
+        catch (err) { console.error(err); toast("Could not save score.", true); }
+      };
+      hs.addEventListener("change", save);
+      as.addEventListener("change", save);
+      const colon = document.createElement("span");
+      colon.className = "fx-colon"; colon.textContent = ":";
+      mid.append(hs, colon, as);
+    } else if (played) {
+      mid.innerHTML = `<span>${f.homeScore}</span><span class="fx-colon">:</span><span>${f.awayScore}</span>`;
+    } else {
+      mid.innerHTML = `<span class="fx-vs">VS</span>`;
+    }
+    scoreRow.append(home, mid, away);
+    card.appendChild(scoreRow);
+
+    // full-time state
+    const ftRow = document.createElement("div");
+    ftRow.className = "fx-ft-row";
+    if (f.done) {
+      const ft = document.createElement("span");
+      ft.className = "fx-ft-badge";
+      ft.textContent = "FULL TIME";
+      ftRow.appendChild(ft);
+      card.classList.add("done");
+    } else if (!admin && !played) {
+      const up = document.createElement("span");
+      up.className = "fx-upcoming"; up.textContent = "upcoming";
+      ftRow.appendChild(up);
+    }
+    if (admin) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn btn-role" + (f.done ? " demote" : "");
+      btn.textContent = f.done ? "Reopen match" : "✅ Done — full time";
+      btn.addEventListener("click", async () => {
+        if (!f.done && !played) return toast("Enter both scores first.", true);
+        try {
+          await updateDoc(doc(db, "tournamentFixtures", d.id), { done: !f.done });
+          toast(f.done ? "Match reopened." : "Full time — table updated 🏁");
+        } catch (err) { console.error(err); toast("Could not update.", true); }
+      });
+      ftRow.appendChild(btn);
+    }
+    card.appendChild(ftRow);
+
+    // goals + assists
+    const stats = document.createElement("div");
+    stats.className = "fx-stats";
+    const players = regsDocs
+      .filter(r => !r.data().teamId || r.data().teamId === f.homeId || r.data().teamId === f.awayId)
+      .map(r => r.data().name);
+    ["goals", "assists"].forEach(kind => {
+      const rowEl = document.createElement("div");
+      rowEl.className = "fx-stat-row";
+      const tag = document.createElement("span");
+      tag.className = `fx-stat-tag ${kind}`;
+      tag.textContent = kind === "goals" ? "⚽ Goals" : "👟 Assists";
+      const chips = document.createElement("div");
+      chips.className = "fx-chips";
+      statChips(chips, d, kind, admin);
+      rowEl.append(tag, chips);
+      stats.appendChild(rowEl);
+      if (admin) stats.appendChild(statAddRow(d, kind, players));
+    });
+    card.appendChild(stats);
+    list.appendChild(card);
+  });
+
+  renderRaces();
+}
+
+/* Golden Boot / Playmaker races — aggregated from every fixture */
+function renderRaces() {
+  const regByName = new Map(regsDocs.map(r => [r.data().name, r.data()]));
+  ["goals", "assists"].forEach(kind => {
+    const totals = new Map();
+    fixturesDocs.forEach(d => {
+      const map = d.data()[kind] || {};
+      Object.entries(map).forEach(([n, c]) => totals.set(n, (totals.get(n) || 0) + c));
+    });
+    const rows = [...totals.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+      .slice(0, 8);
+
+    const wrap = $(kind === "goals" ? "#scorers-race" : "#assists-race");
+    const empty = $(kind === "goals" ? "#scorers-empty" : "#assists-empty");
+    if (!wrap) return;
+    empty.classList.toggle("hidden", rows.length > 0);
+    wrap.innerHTML = "";
+    if (!rows.length) return;
+
+    const max = rows[0].count;
+
+    // leader spotlight
+    const lead = rows[0];
+    const reg = regByName.get(lead.name);
+    const leader = document.createElement("div");
+    leader.className = "race-leader";
+    leader.innerHTML = `
+      <div class="rl-avatar"></div>
+      <div class="rl-info">
+        <div class="rl-name"></div>
+        <div class="rl-team"></div>
+      </div>
+      <div class="rl-count"><span class="rl-num">0</span><small>${kind}</small></div>`;
+    setAvatar($(".rl-avatar", leader), reg?.photo, lead.name);
+    $(".rl-name", leader).textContent = `${kind === "goals" ? "👑 " : "🎯 "}${lead.name}`;
+    $(".rl-team", leader).textContent = reg?.teamId ? teamName(reg.teamId) : (reg?.position || "");
+    animateNumber($(".rl-num", leader), lead.count);
+    wrap.appendChild(leader);
+
+    // the chasing pack
+    rows.slice(1).forEach((r, i) => {
+      const rr = regByName.get(r.name);
+      const row = document.createElement("div");
+      row.className = "race-row";
+      row.style.setProperty("--stagger", `${Math.min(i, 8) * 0.05}s`);
+      row.innerHTML = `
+        <span class="rr-rank">${i + 2}</span>
+        <div class="rr-avatar"></div>
+        <span class="rr-name"></span>
+        <div class="rr-bar"><div class="rr-fill"></div></div>
+        <span class="rr-count"></span>`;
+      setAvatar($(".rr-avatar", row), rr?.photo, r.name);
+      $(".rr-name", row).textContent = r.name;
+      $(".rr-count", row).textContent = r.count;
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        $(".rr-fill", row).style.width = `${(r.count / max) * 100}%`;
+      }));
+      wrap.appendChild(row);
+    });
   });
 }
 
@@ -1846,6 +2174,8 @@ async function assignPlayer(regId, teamId, playerName, teamName) {
 function renderCreditsBoard() {
   const board = $("#credits-board");
   if (!board) return;
+  // never rebuild while the admin is typing in a tile
+  if (board.contains(document.activeElement)) return;
   $("#credits-empty").classList.toggle("hidden", teamsDocs.length > 0);
   board.innerHTML = "";
 
@@ -1879,6 +2209,9 @@ function renderTeamsheets() {
   renderCreditsBoard();
   const wrap = $("#teamsheets");
   if (!wrap) return;
+  // never rebuild while the admin is editing a budget box — the re-render
+  // was wiping the input mid-keystroke before the change could save
+  if (wrap.contains(document.activeElement)) return;
   $("#teamsheets-empty").classList.toggle("hidden", teamsDocs.length > 0);
   wrap.innerHTML = "";
 
