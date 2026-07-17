@@ -86,7 +86,11 @@ service cloud.firestore {
       // admin edits/removals (admin gate is app-level, consistent with sessions)
       allow update: if request.auth != null
         && request.resource.data.position in ['Goalkeeper', 'Defender', 'Midfielder', 'Forward']
-        && request.resource.data.batch in ['b2021', 'b2022', 'b2023', 'b2024'];
+        && request.resource.data.batch in ['b2021', 'b2022', 'b2023', 'b2024']
+        && (!('soldFor' in request.resource.data)
+            || request.resource.data.soldFor == null
+            || (request.resource.data.soldFor is number
+                && request.resource.data.soldFor >= 0));
       allow delete: if request.auth != null;
     }
 
@@ -102,7 +106,10 @@ service cloud.firestore {
         && request.resource.data.gd is int
         && request.resource.data.wins >= 0
         && request.resource.data.draws >= 0
-        && request.resource.data.losses >= 0;
+        && request.resource.data.losses >= 0
+        && (!('credits' in request.resource.data)
+            || (request.resource.data.credits is number
+                && request.resource.data.credits >= 0));
       allow delete: if request.auth != null;
     }
   }

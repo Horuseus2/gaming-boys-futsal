@@ -10,6 +10,10 @@ import {
    ========================================================================== */
 const LS_KEY = "gbf_user";
 let currentUser = null;          // { id, name, role }
+let memberView = false;          // admin previewing the site as a member
+// Every UI render decision goes through this; real admin writes still check
+// currentUser.role directly, so member view can't weaken anything.
+function isAdmin() { return currentUser?.role === "admin" && !memberView; }
 let sessionPersist = true;       // "keep me logged in": localStorage vs sessionStorage
 
 function saveSession(user) {
@@ -94,21 +98,22 @@ async function hashPin(nameLower, pin) {
 
 /* Downscale an image file to a small square JPEG data-URL (~10 KB) so it can
    live inside the Firestore user document — no Firebase Storage needed. */
-function fileToPhoto(file) {
+function fileToPhoto(file, size = 160, maxLen = 60000) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     const url = URL.createObjectURL(file);
     img.onload = () => {
       URL.revokeObjectURL(url);
-      const S = 160;
+      const S = size;
       const canvas = document.createElement("canvas");
       canvas.width = S; canvas.height = S;
       const ctx = canvas.getContext("2d");
+      ctx.imageSmoothingQuality = "high";
       const side = Math.min(img.width, img.height); // center-crop to square
       ctx.drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, S, S);
-      let q = 0.82, out = canvas.toDataURL("image/jpeg", q);
-      while (out.length > 60000 && q > 0.3) { q -= 0.12; out = canvas.toDataURL("image/jpeg", q); }
-      out.length > 60000 ? reject(new Error("too-big")) : resolve(out);
+      let q = 0.85, out = canvas.toDataURL("image/jpeg", q);
+      while (out.length > maxLen && q > 0.3) { q -= 0.1; out = canvas.toDataURL("image/jpeg", q); }
+      out.length > maxLen ? reject(new Error("too-big")) : resolve(out);
     };
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("bad-image")); };
     img.src = url;
@@ -358,7 +363,12 @@ function renderUserChip() {
   const chip = $("#user-chip");
   chip.innerHTML = "";
   chip.append(currentUser.name);
-  if (currentUser.role === "admin") {
+  if (memberView && currentUser.role === "admin") {
+    const tag = document.createElement("span");
+    tag.className = "role-tag mv-tag";
+    tag.textContent = "member view";
+    chip.append(tag);
+  } else if (isAdmin()) {
     const tag = document.createElement("span");
     tag.className = "role-tag";
     tag.textContent = "admin";
@@ -369,20 +379,37 @@ function renderUserChip() {
 function applyRoleUI() {
   renderUserChip();
   $$(".admin-only").forEach(el =>
-    el.classList.toggle("hidden", currentUser.role !== "admin"));
-  // If admin rights were just removed while on the Admin tab, bounce to Sessions
-  if (currentUser.role !== "admin" && $(".tab.active")?.dataset.tab === "admin") {
+    el.classList.toggle("hidden", !isAdmin()));
+  // The eye toggle follows the REAL role — it's the way back out of member view
+  $("#memberview-btn").classList.toggle("hidden", currentUser.role !== "admin");
+  // If admin rights just went away while on the Admin tab, bounce to Sessions
+  if (!isAdmin() && $(".tab.active")?.dataset.tab === "admin") {
     $$(".tab").find(t => t.dataset.tab === "feed")?.click();
   }
-  $("#empty-hint").textContent = currentUser.role === "admin"
+  $("#empty-hint").textContent = isAdmin()
     ? "Head to the Admin tab to create the first session."
     : "Check back soon — the next game will show up here.";
-  if (currentUser.role === "admin") renderEditList();
+  if (isAdmin()) renderEditList();
   renderRegs();
   renderTable();
   renderAuction();
   positionTabInk();
 }
+
+$("#memberview-btn").addEventListener("click", () => {
+  memberView = !memberView;
+  $("#memberview-btn").classList.toggle("active", memberView);
+  toast(memberView ? "👁 Member view — this is what members see" : "Back to admin view");
+  applyRoleUI();
+  renderMembersList();
+  renderStats();
+  // Session cards: wipe chips so remove-buttons/permissions rebuild cleanly
+  cardEls.forEach((card, id) => {
+    $$(".chips", card).forEach(c => { c.innerHTML = ""; });
+    const d = sessionsCache.get(id);
+    if (d) updateCard(id, d);
+  });
+});
 
 function enterApp() {
   applyRoleUI();
@@ -498,11 +525,7 @@ function addCard(id, data, staggerIndex) {
   card.dataset.id = id;
   card.style.setProperty("--stagger", `${Math.min(staggerIndex, 6) * 0.09}s`);
 
-  if (currentUser.role === "admin") {
-    const del = $(".btn-delete", card);
-    del.classList.remove("hidden");
-    del.addEventListener("click", () => deleteSession(id, data.location));
-  }
+  $(".btn-delete", card).addEventListener("click", () => deleteSession(id, data.location));
   $(".btn-in", card).addEventListener("click", () => vote(id, "in"));
   $(".btn-out", card).addEventListener("click", () => vote(id, "out"));
 
@@ -589,6 +612,8 @@ function updateCard(id, data) {
   $(".btn-guest-toggle", card).disabled = isFull;
   if (isFull) $(".guest-form", card).classList.add("hidden");
 
+  $(".btn-delete", card).classList.toggle("hidden", !isAdmin());
+
   // Payments: auto-listed from whoever is In (players + guests).
   // Everyone sees the state; only admins can tick the boxes.
   const payments = data.payments || {};
@@ -623,8 +648,8 @@ function updateCard(id, data) {
       const box = document.createElement("button");
       box.type = "button";
       box.className = "pay-check" + (isPaid ? " checked" : "");
-      box.disabled = currentUser.role !== "admin";
-      box.title = currentUser.role === "admin"
+      box.disabled = !isAdmin();
+      box.title = isAdmin()
         ? (isPaid ? "Mark as unpaid" : "Mark as paid")
         : (isPaid ? "Paid" : "Not paid yet");
       box.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
@@ -735,7 +760,7 @@ function syncGuestChips(card, guests) {
     ownerEl.textContent = g.addedBy === currentUser.name ? "(your guest)" : `(guest of ${g.addedBy})`;
     chip.append(nameEl, ownerEl);
 
-    if (g.addedBy === currentUser.name || currentUser.role === "admin") {
+    if (g.addedBy === currentUser.name || isAdmin()) {
       const rm = document.createElement("button");
       rm.type = "button";
       rm.className = "guest-remove";
@@ -945,7 +970,7 @@ function toLocalInputValue(date) {
 }
 
 function renderEditList(force = false) {
-  if (currentUser?.role !== "admin") return;
+  if (!isAdmin()) return;
   // Background snapshot updates must not clobber an open form — but calls
   // from the Edit/Cancel/Save buttons (force) always re-render.
   if (!force && editingId && sessionsCache.has(editingId)) return;
@@ -1115,21 +1140,25 @@ function startMembers() {
 
     membersDocs = snap.docs;
     renderStats();
-
-    $("#members-count").textContent = snap.size;
-    const membersList = $("#members-list");
-    membersList.innerHTML = "";
-    snap.docs.forEach((d, i) => membersList.appendChild(memberRow(d, i, false)));
-
-    const rolesList = $("#roles-list");
-    rolesList.innerHTML = "";
-    if (currentUser.role === "admin") {
-      snap.docs.forEach((d, i) => rolesList.appendChild(memberRow(d, i, true)));
-    }
+    renderMembersList();
   }, (err) => {
     console.error(err);
     toast("Could not load members.", true);
   });
+}
+
+function renderMembersList() {
+  if (!currentUser) return;
+  $("#members-count").textContent = membersDocs.length;
+  const membersList = $("#members-list");
+  membersList.innerHTML = "";
+  membersDocs.forEach((d, i) => membersList.appendChild(memberRow(d, i, false)));
+
+  const rolesList = $("#roles-list");
+  rolesList.innerHTML = "";
+  if (isAdmin()) {
+    membersDocs.forEach((d, i) => rolesList.appendChild(memberRow(d, i, true)));
+  }
 }
 
 let myPhotoInput = null;
@@ -1370,7 +1399,8 @@ regPhotoInput.addEventListener("change", async () => {
   regPhotoInput.value = "";
   if (!file) return;
   try {
-    pendingRegPhoto = await fileToPhoto(file);
+    // Auction shows these big — store at 512px (fits the 120K rules cap)
+    pendingRegPhoto = await fileToPhoto(file, 512, 115000);
     $("#reg-photo-preview").innerHTML = `<img src="${pendingRegPhoto}" alt="preview" />`;
     $("#reg-photo-btn").textContent = "Change photo";
     $("#reg-photo-clear").classList.remove("hidden");
@@ -1429,7 +1459,7 @@ function renderRegs() {
   $("#regs-empty").classList.toggle("hidden", regsDocs.length > 0);
 
   // Admin-only: fees collected = per-batch fee × registrations of that batch
-  if (currentUser.role === "admin") {
+  if (isAdmin()) {
     const total = regsDocs.reduce((sum, d) =>
       sum + (tourneyConfig.fees[d.data().batch] || 0), 0);
     animateNumber($("#tile-fees"), total, n => `৳${n.toLocaleString()}`);
@@ -1474,7 +1504,7 @@ function renderRegs() {
     $(".reg-batch", row).textContent = batchLabel(r.batch);
     $(".reg-pos", row).textContent = r.position;
 
-    if (currentUser.role === "admin") {
+    if (isAdmin()) {
       const actions = $(".actions", row);
       const cap = document.createElement("button");
       cap.className = "btn btn-role" + (r.captain ? " demote" : "");
@@ -1520,6 +1550,14 @@ function regEditForm(d) {
       <label>Batch</label>
     </div>
     <div class="field"><input type="text" class="re-txn" placeholder=" " required maxlength="40" /><label>Bkash transaction ID</label></div>
+    <div class="photo-pick">
+      <div class="photo-preview re-photo-preview"></div>
+      <div class="photo-pick-text">
+        <button type="button" class="photo-btn re-photo-btn">Replace photo</button>
+        <span class="photo-note">re-upload to fix a blurry auction picture</span>
+      </div>
+      <input type="file" class="re-photo-input" accept="image/*" hidden />
+    </div>
     <div class="edit-form-actions">
       <button type="submit" class="btn btn-primary"><span class="btn-label">Save</span><span class="btn-spinner"></span></button>
       <button type="button" class="btn btn-cancel">Cancel</button>
@@ -1528,6 +1566,22 @@ function regEditForm(d) {
   $(".re-position", form).value = r.position;
   $(".re-batch", form).value = r.batch;
   $(".re-txn", form).value = r.txn;
+  $(".re-photo-preview", form).innerHTML = `<img src="${r.photo}" alt="current" />`;
+
+  let newPhoto = null;
+  const photoInput = $(".re-photo-input", form);
+  $(".re-photo-btn", form).addEventListener("click", () => photoInput.click());
+  photoInput.addEventListener("change", async () => {
+    const file = photoInput.files[0];
+    photoInput.value = "";
+    if (!file) return;
+    try {
+      newPhoto = await fileToPhoto(file, 512, 115000);
+      $(".re-photo-preview", form).innerHTML = `<img src="${newPhoto}" alt="new" />`;
+      toast("New photo ready — hit Save.");
+    } catch { toast("Couldn't read that image.", true); }
+  });
+
   $(".btn-cancel", form).addEventListener("click", () => { editingRegId = null; renderRegs(); });
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1537,7 +1591,8 @@ function regEditForm(d) {
     try {
       await updateDoc(doc(db, "tournamentRegs", d.id), {
         name, position: $(".re-position", form).value,
-        batch: $(".re-batch", form).value, txn
+        batch: $(".re-batch", form).value, txn,
+        ...(newPhoto ? { photo: newPhoto } : {})
       });
       editingRegId = null;
       toast("Registration updated ✏️");
@@ -1554,14 +1609,17 @@ $("#team-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   if (currentUser?.role !== "admin") return;
   const name = normalizeName($("#t-name").value);
+  const credits = parseInt($("#t-credits").value, 10);
   if (name.length < 2) return toast("Enter a team name.", true);
+  if (!(credits >= 0)) return toast("Credits can't be negative.", true);
   if (teamsDocs.some(d => d.data().name.toLowerCase() === name.toLowerCase()))
     return toast("That team already exists.", true);
   const btn = $("#team-btn");
   setLoading(btn, true);
   try {
-    await addDoc(teamsCol, { name, wins: 0, draws: 0, losses: 0, gd: 0, createdAt: serverTimestamp() });
+    await addDoc(teamsCol, { name, credits, wins: 0, draws: 0, losses: 0, gd: 0, createdAt: serverTimestamp() });
     e.target.reset();
+    $("#t-credits").value = 1000;
     toast(`${name} added to the table ⚽`);
   } catch (err) {
     console.error(err);
@@ -1575,7 +1633,7 @@ function renderTable() {
   if (!currentUser) return;
   const body = $("#table-body");
   if (!body) return;
-  const isAdmin = currentUser.role === "admin";
+  const admin = isAdmin();
 
   const rows = teamsDocs.map(d => {
     const t = d.data();
@@ -1595,7 +1653,7 @@ function renderTable() {
     tr.style.setProperty("--stagger", `${Math.min(i, 10) * 0.04}s`);
 
     const cells = [`<td>${i + 1}</td>`, `<td class="t-name th-team"></td>`];
-    if (isAdmin) {
+    if (admin) {
       cells.push(`<td>${t.played}</td>`);
       ["wins", "draws", "losses", "gd"].forEach(f => {
         cells.push(`<td><input type="number" class="t-input" data-field="${f}" ${f === "gd" ? "" : 'min="0"'} max="999" min="-999" value="${t[f]}" /></td>`);
@@ -1608,7 +1666,7 @@ function renderTable() {
     tr.innerHTML = cells.join("");
     $(".t-name", tr).textContent = t.name;
 
-    if (isAdmin) {
+    if (admin) {
       $$(".t-input", tr).forEach(input => {
         input.addEventListener("change", async () => {
           const f = input.dataset.field;
@@ -1638,15 +1696,46 @@ let auctionIndex = 0;
 
 $("#auc-prev").addEventListener("click", () => moveAuction(-1));
 $("#auc-next").addEventListener("click", () => moveAuction(1));
-function moveAuction(dir) {
-  if (!regsDocs.length) return;
-  auctionIndex = (auctionIndex + dir + regsDocs.length) % regsDocs.length;
+function swapAnim() {
   const p = $("#auction-player");
   p.classList.remove("swap");
   void p.offsetWidth; // restart the swap animation
   p.classList.add("swap");
+}
+function moveAuction(dir) {
+  if (!regsDocs.length) return;
+  auctionIndex = (auctionIndex + dir + regsDocs.length) % regsDocs.length;
+  swapAnim();
   renderAuction();
 }
+
+/* 🎲 shuffle-spin to a random (preferably unsold) player */
+$("#auc-random").addEventListener("click", () => {
+  if (currentUser?.role !== "admin" || regsDocs.length === 0) return;
+  const unsold = regsDocs.map((d, i) => ({ d, i })).filter(x => !x.d.data().teamId).map(x => x.i);
+  const pool = unsold.length ? unsold : regsDocs.map((_, i) => i);
+  const target = pool[Math.floor(Math.random() * pool.length)];
+
+  const btn = $("#auc-random");
+  btn.classList.add("rolling");
+  let step = 0;
+  const steps = regsDocs.length > 1 ? 9 + Math.floor(Math.random() * 5) : 0;
+  const hop = () => {
+    if (step < steps) {
+      auctionIndex = (auctionIndex + 1) % regsDocs.length;
+    } else {
+      auctionIndex = target;
+    }
+    swapAnim();
+    renderAuction();
+    if (step++ < steps) {
+      setTimeout(hop, 55 + step * 16); // decelerating shuffle
+    } else {
+      btn.classList.remove("rolling");
+    }
+  };
+  hop();
+});
 
 function renderAuction() {
   if (!currentUser) return;
@@ -1670,7 +1759,15 @@ function renderAuction() {
       band.textContent = "Ⓒ";
       nameEl.appendChild(band);
     }
-    $("#auc-meta").textContent = `${r.position} · ${batchLabel(r.batch)}`;
+    const meta = $("#auc-meta");
+    meta.innerHTML = "";
+    const posChip = document.createElement("span");
+    posChip.className = "auc-chip";
+    posChip.textContent = r.position;
+    const batchChip = document.createElement("span");
+    batchChip.className = "auc-chip batch";
+    batchChip.textContent = batchLabel(r.batch);
+    meta.append(posChip, batchChip);
     $("#auc-counter").textContent = `${auctionIndex + 1} / ${regsDocs.length}`;
 
     // status: sold / unsold
@@ -1680,8 +1777,8 @@ function renderAuction() {
     if (soldTeam) {
       const tag = document.createElement("span");
       tag.className = "sold-tag";
-      tag.textContent = `SOLD → ${soldTeam.data().name}`;
-      if (currentUser.role === "admin") {
+      tag.textContent = `SOLD → ${soldTeam.data().name} · ${(r.soldFor || 0).toLocaleString()} cr`;
+      if (isAdmin()) {
         const un = document.createElement("button");
         un.type = "button";
         un.className = "sold-unassign";
@@ -1698,7 +1795,20 @@ function renderAuction() {
       status.appendChild(tag);
     }
 
-    // admin: team buttons under the player
+    // admin: sale price + team buttons under the player
+    const priceInput = $("#auc-price");
+    if (document.activeElement !== priceInput) priceInput.value = r.soldFor || 0;
+    const saveBtn = $("#auc-price-save");
+    saveBtn.classList.toggle("hidden", !soldTeam);
+    saveBtn.onclick = async () => {
+      const v = parseInt(priceInput.value, 10);
+      if (!(v >= 0)) return toast("Price can't be negative.", true);
+      try {
+        await updateDoc(doc(db, "tournamentRegs", d.id), { soldFor: v });
+        toast(`${r.name}'s price set to ${v.toLocaleString()} cr`);
+      } catch (err) { console.error(err); toast("Could not update price.", true); }
+    };
+
     const picks = $("#auc-teams");
     picks.innerHTML = "";
     teamsDocs.forEach(t => {
@@ -1720,16 +1830,53 @@ function renderAuction() {
 
 async function assignPlayer(regId, teamId, playerName, teamName) {
   if (currentUser.role !== "admin") return;
+  const price = teamId ? Math.max(0, parseInt($("#auc-price").value, 10) || 0) : 0;
   try {
-    await updateDoc(doc(db, "tournamentRegs", regId), { teamId: teamId || null });
-    toast(teamId ? `${playerName} sold to ${teamName}! 🔨` : `${playerName} unassigned.`);
+    await updateDoc(doc(db, "tournamentRegs", regId), { teamId: teamId || null, soldFor: price });
+    toast(teamId
+      ? `${playerName} sold to ${teamName} for ${price.toLocaleString()} cr! 🔨`
+      : `${playerName} unassigned.`);
   } catch (err) {
     console.error(err);
     toast("Could not assign player.", true);
   }
 }
 
+/* Big remaining-credits board — the money scoreboard of the auction */
+function renderCreditsBoard() {
+  const board = $("#credits-board");
+  if (!board) return;
+  $("#credits-empty").classList.toggle("hidden", teamsDocs.length > 0);
+  board.innerHTML = "";
+
+  teamsDocs.forEach((t, i) => {
+    const budget = typeof t.data().credits === "number" ? t.data().credits : 0;
+    const spent = regsDocs
+      .filter(d => d.data().teamId === t.id)
+      .reduce((sum, d) => sum + (d.data().soldFor || 0), 0);
+    const left = budget - spent;
+    const ratio = budget > 0 ? left / budget : 0;
+
+    const tile = document.createElement("div");
+    tile.className = "credit-tile" + (left < 0 ? " neg" : ratio <= 0.2 ? " low" : "");
+    tile.style.setProperty("--stagger", `${Math.min(i, 8) * 0.05}s`);
+    tile.innerHTML = `
+      <div class="ct-team"></div>
+      <div class="ct-left"><span class="ct-num">0</span><small> cr left</small></div>
+      <div class="ct-bar"><div class="ct-fill"></div></div>
+      <div class="ct-sub"></div>`;
+    $(".ct-team", tile).textContent = t.data().name;
+    animateNumber($(".ct-num", tile), left);
+    $(".ct-sub", tile).textContent = `spent ${spent.toLocaleString()} of ${budget.toLocaleString()}`;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      $(".ct-fill", tile).style.width = `${Math.max(0, Math.min(100, ratio * 100))}%`;
+    }));
+    board.appendChild(tile);
+  });
+}
+
 function renderTeamsheets() {
+  renderCreditsBoard();
   const wrap = $("#teamsheets");
   if (!wrap) return;
   $("#teamsheets-empty").classList.toggle("hidden", teamsDocs.length > 0);
@@ -1742,6 +1889,10 @@ function renderTeamsheets() {
     card.className = "teamsheet";
     card.style.setProperty("--stagger", `${Math.min(i, 8) * 0.06}s`);
 
+    const budget = typeof t.data().credits === "number" ? t.data().credits : 0;
+    const spent = squad.reduce((sum, d) => sum + (d.data().soldFor || 0), 0);
+    const left = budget - spent;
+
     const h = document.createElement("h3");
     h.textContent = t.data().name;
     const count = document.createElement("span");
@@ -1749,6 +1900,39 @@ function renderTeamsheets() {
     count.textContent = squad.length;
     h.appendChild(count);
     card.appendChild(h);
+
+    // Credits line — visible to everyone; budget editable by admins
+    const cred = document.createElement("div");
+    cred.className = "ts-credits" + (left < 0 ? " neg" : "");
+    const label = document.createElement("span");
+    label.innerHTML = `💳 <b>${left.toLocaleString()}</b> cr left`;
+    cred.appendChild(label);
+    if (isAdmin()) {
+      const input = document.createElement("input");
+      input.type = "number";
+      input.className = "ts-budget-input";
+      input.min = 0; input.max = 1000000;
+      input.value = budget;
+      input.title = "Team credit budget";
+      input.addEventListener("change", async () => {
+        const v = parseInt(input.value, 10);
+        if (!(v >= 0)) return toast("Budget can't be negative.", true);
+        try {
+          await updateDoc(doc(db, "tournamentTeams", t.id), { credits: v });
+          toast(`${t.data().name} budget set to ${v.toLocaleString()} cr`);
+        } catch (err) { console.error(err); toast("Could not update budget.", true); }
+      });
+      const of = document.createElement("span");
+      of.className = "ts-of";
+      of.textContent = "of";
+      cred.append(of, input);
+    } else {
+      const of = document.createElement("span");
+      of.className = "ts-of";
+      of.textContent = `of ${budget.toLocaleString()}`;
+      cred.appendChild(of);
+    }
+    card.appendChild(cred);
 
     const list = document.createElement("div");
     list.className = "ts-players";
@@ -1768,7 +1952,10 @@ function renderTeamsheets() {
         const pos = document.createElement("span");
         pos.className = "ts-pos";
         pos.textContent = r.position.slice(0, 3);
-        row.append(av, nm, pos);
+        const price = document.createElement("span");
+        price.className = "ts-price";
+        price.textContent = `${(r.soldFor || 0).toLocaleString()}cr`;
+        row.append(av, nm, pos, price);
         list.appendChild(row);
       });
     }
