@@ -1790,8 +1790,10 @@ function statAddRow(fixtureDoc, kind, playerNames) {
 function renderFixtures() {
   const list = $("#fixtures-list");
   if (!list || !currentUser) return;
-  // don't rebuild fixture cards under an admin mid-edit (scores, labels, stats)
-  if (list.contains(document.activeElement)) {
+  // don't rebuild fixture cards while an admin is TYPING in one — only text
+  // entry holds state worth protecting; focused buttons must not block updates
+  const ae = document.activeElement;
+  if (list.contains(ae) && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName)) {
     renderRaces();
     renderTable();
     return;
@@ -2178,8 +2180,9 @@ async function assignPlayer(regId, teamId, playerName, teamName) {
 function renderCreditsBoard() {
   const board = $("#credits-board");
   if (!board) return;
-  // never rebuild while the admin is typing in a tile
-  if (board.contains(document.activeElement)) return;
+  // never rebuild while the admin is typing in a tile (inputs only)
+  const bAe = document.activeElement;
+  if (board.contains(bAe) && /^(INPUT|SELECT|TEXTAREA)$/.test(bAe.tagName)) return;
   $("#credits-empty").classList.toggle("hidden", teamsDocs.length > 0);
   board.innerHTML = "";
 
@@ -2213,9 +2216,10 @@ function renderTeamsheets() {
   renderCreditsBoard();
   const wrap = $("#teamsheets");
   if (!wrap) return;
-  // never rebuild while the admin is editing a budget box — the re-render
-  // was wiping the input mid-keystroke before the change could save
-  if (wrap.contains(document.activeElement)) return;
+  // never rebuild while the admin is editing a budget box (inputs only) —
+  // the re-render was wiping the input mid-keystroke before it could save
+  const wAe = document.activeElement;
+  if (wrap.contains(wAe) && /^(INPUT|SELECT|TEXTAREA)$/.test(wAe.tagName)) return;
   $("#teamsheets-empty").classList.toggle("hidden", teamsDocs.length > 0);
   wrap.innerHTML = "";
 
