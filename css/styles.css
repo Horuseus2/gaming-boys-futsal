@@ -1381,35 +1381,104 @@ body {
 .fixture.done { border-color: rgba(34,197,94,0.3); }
 .fixture.done .fx-score input, .fixture.done .fx-score span { opacity: 0.95; }
 .fx-del { margin-left: auto; }
-.fx-stats { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
-.fx-stat-row { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; }
-.fx-stat-tag {
-  flex-shrink: 0; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.06em;
-  text-transform: uppercase; padding: 4px 10px; border-radius: 99px; margin-top: 2px;
+
+/* Match report — broadcast scoresheet under the scoreline */
+.fx-report {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 4px 18px;
+  margin-top: 12px; padding-top: 12px; position: relative;
+  border-top: 1px solid rgba(255,255,255,0.06);
 }
-.fx-stat-tag.goals { color: var(--amber); background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.3); }
-.fx-stat-tag.assists { color: #38bdf8; background: rgba(56,189,248,0.1); border: 1px solid rgba(56,189,248,0.3); }
-.fx-chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; }
-.fx-chip {
-  font-size: 0.78rem; padding: 4px 10px; border-radius: 99px;
-  background: rgba(255,255,255,0.06); border: 1px solid var(--card-border);
-  animation: chipIn 0.35s var(--ease-spring) both;
+.fx-report::after {
+  content: ""; position: absolute; top: 12px; bottom: 4px; left: 50%;
+  width: 1px; background: linear-gradient(180deg, rgba(255,255,255,0.1), transparent);
 }
-.fx-chip b { font-variant-numeric: tabular-nums; }
-.fx-chip button {
-  background: none; border: none; color: var(--text-dim); cursor: pointer;
-  padding: 0 0 0 5px; font-size: 0.8rem;
+.fx-report-side { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.fx-report-side.home { align-items: flex-end; }
+.fx-report-side.away { align-items: flex-start; }
+.fx-report-side.other {
+  grid-column: 1 / -1; align-items: center; margin-top: 4px;
+  padding-top: 6px; border-top: 1px dashed rgba(255,255,255,0.06);
 }
-.fx-chip button:hover { color: var(--red); }
-.fx-none { color: var(--text-dim); font-size: 0.75rem; font-style: italic; padding-top: 4px; }
-.fx-add-row { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
-.fx-add-row select, .fx-add-row input {
+.fx-line {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+  font-size: 0.84rem; line-height: 1.4;
+  animation: memberIn 0.35s var(--ease-out) both;
+}
+.fx-report-side.home .fx-line { flex-direction: row-reverse; }
+.fx-line-icon { font-size: 0.78rem; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.5)); }
+.fx-line-name {
+  font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.fx-line.assist { opacity: 0.75; }
+.fx-line.assist .fx-line-name { font-weight: 500; font-size: 0.78rem; }
+.fx-line-count {
+  font-family: var(--font-display); font-weight: 800; font-size: 0.78rem;
+  color: var(--green); font-variant-numeric: tabular-nums;
+}
+.fx-line.assist .fx-line-count { color: #38bdf8; }
+.fixture.final .fx-line-count { color: var(--amber); }
+.fx-line-rm {
+  background: none; border: none; cursor: pointer; color: transparent;
+  font-size: 0.72rem; padding: 2px 3px; line-height: 1; border-radius: 5px;
+  transition: color 0.2s, background 0.2s;
+}
+.fx-line:hover .fx-line-rm { color: var(--text-dim); }
+.fx-line-rm:hover { color: var(--red) !important; background: var(--red-soft); }
+
+/* Admin editor — tucked behind a ghost toggle */
+.fx-editor-wrap { margin-top: 12px; text-align: center; }
+.fx-add-toggle {
+  background: none; border: 1px dashed rgba(255,255,255,0.15); cursor: pointer;
+  color: var(--text-dim); font-family: var(--font-display);
+  font-size: 0.72rem; font-weight: 700; letter-spacing: 0.05em;
+  padding: 6px 16px; border-radius: 99px;
+  transition: all 0.25s var(--ease-out);
+}
+.fx-add-toggle:hover { color: var(--green); border-color: rgba(34,197,94,0.4); background: rgba(34,197,94,0.06); }
+.fx-editor {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  flex-wrap: wrap; margin-top: 10px; padding: 12px;
+  background: rgba(0,0,0,0.22); border: 1px solid rgba(255,255,255,0.06);
+  border-radius: var(--radius-sm);
+  animation: guestFormIn 0.3s var(--ease-out) both;
+}
+.fx-seg {
+  display: flex; background: rgba(255,255,255,0.05);
+  border: 1px solid var(--card-border); border-radius: 99px; padding: 3px;
+}
+.fx-seg-btn {
+  border: none; background: none; cursor: pointer; border-radius: 99px;
+  font-family: var(--font-display); font-size: 0.72rem; font-weight: 700;
+  color: var(--text-dim); padding: 6px 13px;
+  transition: all 0.25s var(--ease-out);
+}
+.fx-seg-btn.goal.active { color: #1a1204; background: linear-gradient(135deg, #fbbf24, #f59e0b); box-shadow: 0 3px 10px rgba(251,191,36,0.35); }
+.fx-seg-btn.assist.active { color: #06202b; background: linear-gradient(135deg, #7dd3fc, #38bdf8); box-shadow: 0 3px 10px rgba(56,189,248,0.35); }
+.fx-player-sel {
+  flex: 1; min-width: 120px; max-width: 200px;
   background: rgba(255,255,255,0.05); border: 1.5px solid var(--card-border);
-  border-radius: 9px; color: var(--text); font-size: 0.8rem; padding: 8px 10px; outline: none;
+  border-radius: 99px; color: var(--text); font-size: 0.8rem;
+  padding: 8px 14px; outline: none; transition: border-color 0.25s;
 }
-.fx-add-row select { flex: 1; min-width: 130px; }
-.fx-add-row input { width: 58px; text-align: center; }
-.fx-add-row .btn { width: auto; padding: 8px 14px; font-size: 0.72rem; }
+.fx-player-sel:focus { border-color: var(--green); }
+.fx-stepper {
+  display: flex; align-items: center; gap: 2px;
+  background: rgba(255,255,255,0.05); border: 1px solid var(--card-border);
+  border-radius: 99px; padding: 3px;
+}
+.fx-stepper button {
+  width: 26px; height: 26px; border-radius: 50%; border: none; cursor: pointer;
+  background: rgba(255,255,255,0.07); color: var(--text);
+  font-size: 0.95rem; line-height: 1; display: grid; place-items: center;
+  transition: all 0.2s var(--ease-spring);
+}
+.fx-stepper button:hover { background: var(--green-soft); color: var(--green); transform: scale(1.1); }
+.fx-stepper button:active { transform: scale(0.9); }
+.fx-stepper span {
+  font-family: var(--font-display); font-weight: 800; font-size: 0.85rem;
+  min-width: 24px; text-align: center; font-variant-numeric: tabular-nums;
+}
+.fx-add-btn { border-radius: 99px; }
 
 /* ---- Golden races (top scorers / assists) ---- */
 .race-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px; }

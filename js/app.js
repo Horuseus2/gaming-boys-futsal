@@ -1730,61 +1730,147 @@ function teamName(id) {
   return t ? t.data().name : "—";
 }
 
-function statChips(container, fixtureDoc, kind, admin) {
-  const data = fixtureDoc.data()[kind] || {};
-  const names = Object.keys(data).sort((a, b) => data[b] - data[a]);
-  container.innerHTML = "";
-  if (!names.length) {
-    container.innerHTML = `<span class="fx-none">none yet</span>`;
-    return;
+const openFxEditors = new Set(); // fixture ids with the add-editor expanded
+
+/* One scorer/assist line in the match report, e.g. "⚽ Rakin ×2" */
+function reportLine(fixtureDoc, kind, name, count, admin) {
+  const line = document.createElement("div");
+  line.className = `fx-line ${kind === "goals" ? "goal" : "assist"}`;
+  const icon = document.createElement("span");
+  icon.className = "fx-line-icon";
+  icon.textContent = kind === "goals" ? "⚽" : "👟";
+  const nm = document.createElement("span");
+  nm.className = "fx-line-name";
+  nm.textContent = name;
+  line.append(icon, nm);
+  if (count > 1) {
+    const c = document.createElement("span");
+    c.className = "fx-line-count";
+    c.textContent = `×${count}`;
+    line.appendChild(c);
   }
-  names.forEach(n => {
-    const chip = document.createElement("span");
-    chip.className = "fx-chip";
-    chip.innerHTML = `${kind === "goals" ? "⚽" : "👟"} `;
-    chip.append(n, " ");
-    const b = document.createElement("b");
-    b.textContent = `×${data[n]}`;
-    chip.appendChild(b);
-    if (admin) {
-      const rm = document.createElement("button");
-      rm.type = "button"; rm.textContent = "✕"; rm.title = "Remove";
-      rm.addEventListener("click", async () => {
-        const map = { ...(fixtureDoc.data()[kind] || {}) };
-        delete map[n];
-        try { await updateDoc(doc(db, "tournamentFixtures", fixtureDoc.id), { [kind]: map }); }
-        catch (err) { console.error(err); toast("Could not remove.", true); }
-      });
-      chip.appendChild(rm);
-    }
-    container.appendChild(chip);
-  });
+  if (admin) {
+    const rm = document.createElement("button");
+    rm.type = "button";
+    rm.className = "fx-line-rm";
+    rm.title = "Remove";
+    rm.textContent = "✕";
+    rm.addEventListener("click", async () => {
+      const map = { ...(fixtureDoc.data()[kind] || {}) };
+      delete map[name];
+      try { await updateDoc(doc(db, "tournamentFixtures", fixtureDoc.id), { [kind]: map }); }
+      catch (err) { console.error(err); toast("Could not remove.", true); }
+    });
+    line.appendChild(rm);
+  }
+  return line;
 }
 
-function statAddRow(fixtureDoc, kind, playerNames) {
-  const row = document.createElement("div");
-  row.className = "fx-add-row";
+/* Broadcast-style match report: scorers under their own team's side */
+function buildReport(fixtureDoc, f, admin) {
+  const regByName = new Map(regsDocs.map(r => [r.data().name, r.data()]));
+  const home = [], away = [], other = [];
+  ["goals", "assists"].forEach(kind => {
+    Object.entries(f[kind] || {})
+      .sort((a, b) => b[1] - a[1])
+      .forEach(([name, count]) => {
+        const line = reportLine(fixtureDoc, kind, name, count, admin);
+        const teamId = regByName.get(name)?.teamId;
+        if (teamId === f.homeId) home.push(line);
+        else if (teamId === f.awayId) away.push(line);
+        else other.push(line);
+      });
+  });
+  if (!home.length && !away.length && !other.length) return null;
+
+  const report = document.createElement("div");
+  report.className = "fx-report";
+  const hs = document.createElement("div");
+  hs.className = "fx-report-side home";
+  home.forEach(l => hs.appendChild(l));
+  const as = document.createElement("div");
+  as.className = "fx-report-side away";
+  away.forEach(l => as.appendChild(l));
+  report.append(hs, as);
+  if (other.length) {
+    const os = document.createElement("div");
+    os.className = "fx-report-side other";
+    other.forEach(l => os.appendChild(l));
+    report.appendChild(os);
+  }
+  return report;
+}
+
+/* Compact admin editor behind a "+ Goal / assist" toggle */
+function buildFxEditor(fixtureDoc, players) {
+  const wrap = document.createElement("div");
+  wrap.className = "fx-editor-wrap";
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "fx-add-toggle";
+  toggle.textContent = "+ Goal / assist";
+
+  const editor = document.createElement("div");
+  editor.className = "fx-editor";
+  editor.classList.toggle("hidden", !openFxEditors.has(fixtureDoc.id));
+
+  let kind = "goals";
+  const seg = document.createElement("div");
+  seg.className = "fx-seg";
+  const segGoal = document.createElement("button");
+  segGoal.type = "button"; segGoal.className = "fx-seg-btn goal active"; segGoal.textContent = "⚽ Goal";
+  const segAssist = document.createElement("button");
+  segAssist.type = "button"; segAssist.className = "fx-seg-btn assist"; segAssist.textContent = "👟 Assist";
+  seg.append(segGoal, segAssist);
+  const setKind = (k) => {
+    kind = k;
+    segGoal.classList.toggle("active", k === "goals");
+    segAssist.classList.toggle("active", k === "assists");
+  };
+  segGoal.addEventListener("click", () => setKind("goals"));
+  segAssist.addEventListener("click", () => setKind("assists"));
+
   const sel = document.createElement("select");
-  sel.innerHTML = `<option value="">${kind === "goals" ? "Scorer…" : "Assist by…"}</option>` +
-    playerNames.map(n => `<option>${n.replace(/</g, "&lt;")}</option>`).join("");
-  const num = document.createElement("input");
-  num.type = "number"; num.min = 1; num.max = 99; num.value = 1;
+  sel.className = "fx-player-sel";
+  sel.innerHTML = `<option value="">Player…</option>` +
+    players.map(n => `<option>${n.replace(/</g, "&lt;")}</option>`).join("");
+
+  const stepper = document.createElement("div");
+  stepper.className = "fx-stepper";
+  let count = 1;
+  const minus = document.createElement("button");
+  minus.type = "button"; minus.textContent = "−";
+  const num = document.createElement("span");
+  num.textContent = "1";
+  const plus = document.createElement("button");
+  plus.type = "button"; plus.textContent = "+";
+  minus.addEventListener("click", () => { count = Math.max(1, count - 1); num.textContent = count; });
+  plus.addEventListener("click", () => { count = Math.min(99, count + 1); num.textContent = count; });
+  stepper.append(minus, num, plus);
+
   const add = document.createElement("button");
-  add.type = "button"; add.className = "btn btn-role"; add.textContent = "Add";
+  add.type = "button"; add.className = "btn btn-role fx-add-btn"; add.textContent = "Add";
   add.addEventListener("click", async () => {
     const name = sel.value;
-    const n = parseInt(num.value, 10);
     if (!name) return toast("Pick a player.", true);
-    if (!(n >= 1)) return toast("Count must be at least 1.", true);
     const map = { ...(fixtureDoc.data()[kind] || {}) };
-    map[name] = n; // set exact count (re-add to correct)
+    map[name] = count; // exact count — re-add to correct
     try {
       await updateDoc(doc(db, "tournamentFixtures", fixtureDoc.id), { [kind]: map });
-      toast(`${name}: ${n} ${kind === "goals" ? "goal" : "assist"}${n > 1 ? "s" : ""} ✔`);
+      toast(`${name}: ${count} ${kind === "goals" ? "goal" : "assist"}${count > 1 ? "s" : ""} ✔`);
+      count = 1; num.textContent = "1";
     } catch (err) { console.error(err); toast("Could not save.", true); }
   });
-  row.append(sel, num, add);
-  return row;
+
+  editor.append(seg, sel, stepper, add);
+  toggle.addEventListener("click", () => {
+    const open = editor.classList.toggle("hidden");
+    if (open) openFxEditors.delete(fixtureDoc.id);
+    else openFxEditors.add(fixtureDoc.id);
+  });
+  wrap.append(toggle, editor);
+  return wrap;
 }
 
 function renderFixtures() {
@@ -1931,30 +2017,19 @@ function renderFixtures() {
     }
     card.appendChild(ftRow);
 
-    // goals + assists
-    const stats = document.createElement("div");
-    stats.className = "fx-stats";
-    // only the two squads playing this match; if no one is assigned yet
-    // (pre-auction), fall back to all registered players
-    let players = regsDocs
-      .filter(r => r.data().teamId && (r.data().teamId === f.homeId || r.data().teamId === f.awayId))
-      .map(r => r.data().name);
-    if (!players.length) players = regsDocs.map(r => r.data().name);
-    players.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
-    ["goals", "assists"].forEach(kind => {
-      const rowEl = document.createElement("div");
-      rowEl.className = "fx-stat-row";
-      const tag = document.createElement("span");
-      tag.className = `fx-stat-tag ${kind}`;
-      tag.textContent = kind === "goals" ? "⚽ Goals" : "👟 Assists";
-      const chips = document.createElement("div");
-      chips.className = "fx-chips";
-      statChips(chips, d, kind, admin);
-      rowEl.append(tag, chips);
-      stats.appendChild(rowEl);
-      if (admin) stats.appendChild(statAddRow(d, kind, players));
-    });
-    card.appendChild(stats);
+    // match report: goals + assists under each team's side
+    const report = buildReport(d, f, admin);
+    if (report) card.appendChild(report);
+    if (admin) {
+      // only the two squads playing this match; if no one is assigned yet
+      // (pre-auction), fall back to all registered players
+      let players = regsDocs
+        .filter(r => r.data().teamId && (r.data().teamId === f.homeId || r.data().teamId === f.awayId))
+        .map(r => r.data().name);
+      if (!players.length) players = regsDocs.map(r => r.data().name);
+      players.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+      card.appendChild(buildFxEditor(d, players));
+    }
     list.appendChild(card);
   });
 
