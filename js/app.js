@@ -1932,9 +1932,9 @@ function renderFixtures() {
     // goals + assists
     const stats = document.createElement("div");
     stats.className = "fx-stats";
-    const players = regsDocs
-      .filter(r => !r.data().teamId || r.data().teamId === f.homeId || r.data().teamId === f.awayId)
-      .map(r => r.data().name);
+    // every registered player, alphabetical — no team filtering
+    const players = regsDocs.map(r => r.data().name)
+      .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
     ["goals", "assists"].forEach(kind => {
       const rowEl = document.createElement("div");
       rowEl.className = "fx-stat-row";
