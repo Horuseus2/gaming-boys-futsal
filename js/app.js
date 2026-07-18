@@ -1932,9 +1932,13 @@ function renderFixtures() {
     // goals + assists
     const stats = document.createElement("div");
     stats.className = "fx-stats";
-    // every registered player, alphabetical — no team filtering
-    const players = regsDocs.map(r => r.data().name)
-      .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+    // only the two squads playing this match; if no one is assigned yet
+    // (pre-auction), fall back to all registered players
+    let players = regsDocs
+      .filter(r => r.data().teamId && (r.data().teamId === f.homeId || r.data().teamId === f.awayId))
+      .map(r => r.data().name);
+    if (!players.length) players = regsDocs.map(r => r.data().name);
+    players.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
     ["goals", "assists"].forEach(kind => {
       const rowEl = document.createElement("div");
       rowEl.className = "fx-stat-row";
